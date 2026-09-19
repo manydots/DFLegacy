@@ -1,0 +1,40 @@
+name: build
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build solution (includes native vcxproj)
+        run: msbuild .\DFLegacy.Emulator.slnx /m /restore /p:Configuration=Release
+
+      - name: Smoke tests
+        run: .\tests\DFLegacy.SmokeTests\bin\Release\net10.0\DFLegacy.SmokeTests.exe
+
+      - name: Publish server and launcher
+        run: |
+          dotnet publish .\src\DFLegacy.Server\DFLegacy.Server.csproj -c Release -o .\dist\DFLegacy.Server
+          dotnet publish .\src\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o .\dist\DFLegacy.Server
+
+      - name: Upload publish artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DFLegacy-dist
+          path: dist/DFLegacy.Server
+          retention-days: 7

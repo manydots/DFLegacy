@@ -7560,10 +7560,11 @@ finally
 }
 
 var realPvfPath = Environment.GetEnvironmentVariable("DF2008_REAL_PVF_PATH");
-if (string.IsNullOrWhiteSpace(realPvfPath)
-    && File.Exists(@"D:\DFLegacy\DF2008\Script.pvf"))
+if (string.IsNullOrWhiteSpace(realPvfPath))
 {
-    realPvfPath = @"D:\DFLegacy\DF2008\Script.pvf";
+    // Same layout convention as server.json: "..\" from the DFLegacy.Server.exe
+    // directory is the client directory that contains Script.pvf.
+    realPvfPath = Path.GetFullPath(@"..\Script.pvf", AppContext.BaseDirectory);
 }
 
 if (!string.IsNullOrWhiteSpace(realPvfPath) && File.Exists(realPvfPath))

@@ -6,7 +6,7 @@ namespace DFLegacy.Launcher;
 
 internal static class Program
 {
-    internal const string DefaultClientPath = @"D:\DFLegacy\DF2008\DNF.exe";
+    internal const string DefaultClientPath = @"..\DNF.exe";
     private const int ServerStartupAttempts = 40;
     private static readonly TimeSpan PortProbeTimeout = TimeSpan.FromMilliseconds(250);
 

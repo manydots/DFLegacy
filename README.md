@@ -91,13 +91,15 @@ dotnet publish .\src\DFLegacy.Server\DFLegacy.Server.csproj -c Release -o .\dist
 dotnet publish .\src\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o .\dist\DFLegacy.Server
 ```
 
+以上构建与发布步骤可由仓库根目录的 `publish.bat` 一键完成：脚本优先使用 PATH 上的 MSBuild，否则通过 vswhere 自动定位 Visual Studio 自带的 MSBuild；构建成功后、发布前会清空 `dist` 输出目录（其中如有 `data` 存档也会一并删除），任一步失败即停止并返回非零退出码。
+
 启动器发布会构建并复制 IJL15。若只构建服务端而没有 `DFLegacy.RandomNative.dll` 原生随机模块，则仍使用操作系统伪随机。
 
-1. 编辑发布目录中的 `server.json`，将 `DFLegacy.ScriptPvfPath` 改为实际 PVF 路径。
-2. 编辑同目录的 `launcher.json`，设置 `ClientPath` 和登录账号；客户端目录也应包含匹配的 `Script.pvf`。
+1. `server.json` 的 `DFLegacy.ScriptPvfPath` 默认 `..\Script.pvf`；发布目录放在客户端目录内（与 `DNF.exe` 同级）时无需修改，否则改为实际 PVF 路径（相对路径以服务端程序目录为基准）。
+2. 同目录的 `launcher.json` 的 `ClientPath` 默认 `..\DNF.exe`，按相同布局解析；账号也在此配置，客户端目录应包含匹配的 `Script.pvf`。
 3. 运行 `DFLegacy.Launcher.exe`。默认 `StartServer: true`，启动器会按需启动本地服务端。
 
-仓库示例配置含测试环境绝对路径，需要自行调整，并不会自动适配目录。
+示例配置按"发布目录位于客户端目录内"的布局使用相对路径；布局不同时请自行调整为实际路径。
 
 仅运行服务端时，可在发布目录执行：
 

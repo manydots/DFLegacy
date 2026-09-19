@@ -10,6 +10,10 @@
     <Ijl15ProjectDirectory>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\DFLegacy.Ijl15'))</Ijl15ProjectDirectory>
     <Ijl15BuildScript>$(Ijl15ProjectDirectory)\build-native.ps1</Ijl15BuildScript>
     <Ijl15Output>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\artifacts\native\ijl15\$(Configuration)\ijl15.dll'))</Ijl15Output>
+    <!-- PowerShell 7 if installed, otherwise fall back to Windows PowerShell 5.1 -->
+    <Ijl15PowerShell Condition="'$(Ijl15PowerShell)' == '' and Exists('$(ProgramFiles)\PowerShell\7\pwsh.exe')">"$(ProgramFiles)\PowerShell\7\pwsh.exe"</Ijl15PowerShell>
+    <Ijl15PowerShell Condition="'$(Ijl15PowerShell)' == '' and Exists('$(LocalAppData)\Microsoft\WindowsApps\pwsh.exe')">"$(LocalAppData)\Microsoft\WindowsApps\pwsh.exe"</Ijl15PowerShell>
+    <Ijl15PowerShell Condition="'$(Ijl15PowerShell)' == ''">powershell.exe</Ijl15PowerShell>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../DFLegacy.Protocol/DFLegacy.Protocol.csproj" />
@@ -27,7 +31,7 @@
   <Target Name="BuildIjl15"
           BeforeTargets="Build"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(MSBuildRuntimeType)' == 'Core'">
-    <Exec Command="pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(Ijl15BuildScript)&quot; -Configuration &quot;$(Configuration)&quot;" />
+    <Exec Command="$(Ijl15PowerShell) -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(Ijl15BuildScript)&quot; -Configuration &quot;$(Configuration)&quot;" />
   </Target>
   <Target Name="CopyIjl15ToOutput"
           AfterTargets="Build"

@@ -32,7 +32,7 @@
       "Port": 7001
     },
     "DataPath": "data/state.json",
-    "ScriptPvfPath": "D:\\DFLegacy\\DF2008\\Script.pvf",
+    "ScriptPvfPath": "..\\Script.pvf",
     "SkillScriptPath": "",
     "Channel": {
       "Name": "Local Channel",

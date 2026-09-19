@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (created on the selected commit if missing)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.release_tag }}"
+          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+          if (-not $tag.StartsWith('v')) { throw "Tag must start with 'v': $tag" }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build solution and run smoke tests
+        run: |
+          msbuild .\DFLegacy.Emulator.slnx /m /restore /p:Configuration=Release
+          .\tests\DFLegacy.SmokeTests\bin\Release\net10.0\DFLegacy.SmokeTests.exe
+
+      - name: Publish server and launcher
+        run: |
+          dotnet publish .\src\DFLegacy.Server\DFLegacy.Server.csproj -c Release -o .\dist\DFLegacy.Server
+          dotnet publish .\src\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o .\dist\DFLegacy.Server
+
+      - name: Pack ZIP with SHA-256
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.tag.outputs.tag }}"
+          $zip = "artifacts/release/DFLegacy-$tag.zip"
+          New-Item -ItemType Directory -Path (Split-Path $zip) -Force | Out-Null
+          Compress-Archive -Path "dist/DFLegacy.Server/*" -DestinationPath $zip -Force
+          $sha256 = (Get-FileHash -Path $zip -Algorithm SHA256).Hash
+          Set-Content -Path "$zip.sha256" -Value "$sha256  $(Split-Path -Leaf $zip)"
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            artifacts/release/*.zip
+            artifacts/release/*.sha256

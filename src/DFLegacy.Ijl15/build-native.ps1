@@ -12,9 +12,21 @@ $cmakeCandidates = @(
     (Join-Path $env:ProgramFiles "CMake\bin\cmake.exe"),
     (Get-Command cmake.exe -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty Source)
-) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+)
 
-$cmake = $cmakeCandidates | Select-Object -First 1
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+if (Test-Path -LiteralPath $vswhere) {
+    $vsInstallPath = & $vswhere -latest -products * -property installationPath 2>$null |
+        Select-Object -First 1
+    if ($vsInstallPath) {
+        $cmakeCandidates += Join-Path $vsInstallPath `
+            "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    }
+}
+
+$cmake = $cmakeCandidates |
+    Where-Object { $_ -and (Test-Path -LiteralPath $_) } |
+    Select-Object -First 1
 if (-not $cmake) {
     throw "CMake 3.24 or newer is required to build DFLegacy.Ijl15."
 }

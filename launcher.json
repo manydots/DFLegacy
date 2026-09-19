@@ -1,5 +1,5 @@
 {
-  "ClientPath": "D:\\DFLegacy\\DF2008\\DNF.exe",
+  "ClientPath": "..\\DNF.exe",
   "EntranceHost": "127.0.0.1",
   "EntrancePort": 2311,
   "Account": "test",
