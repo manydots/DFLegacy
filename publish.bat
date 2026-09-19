@@ -46,14 +46,17 @@ if errorlevel 1 goto :fail
 
 echo.
 echo [publish] Done. Output directory: %CD%\dist\DFLegacy.Server
+pause
 exit /b 0
 
 :no_msbuild
 echo [publish] MSBuild was not found. Run from a Visual Studio developer
 echo [publish] prompt, or install Visual Studio with the MSBuild component.
+pause
 exit /b 1
 
 :fail
 echo.
 echo [publish] FAILED. See the log above for details.
+pause
 exit /b 1

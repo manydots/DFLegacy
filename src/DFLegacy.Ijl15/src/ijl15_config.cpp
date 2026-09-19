@@ -12,8 +12,8 @@ namespace
 {
     constexpr int BuiltinWidth = 640;
     constexpr int BuiltinHeight = 480;
-    constexpr int DefaultWindowWidth = 800;
-    constexpr int DefaultWindowHeight = 600;
+    constexpr int DefaultWindowWidth = 640;
+    constexpr int DefaultWindowHeight = 480;
     constexpr int MaximumWindowDimension = 8192;
     constexpr char ConfigFileName[] = "Config.ini";
 

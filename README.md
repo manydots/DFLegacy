@@ -107,6 +107,8 @@ dotnet publish .\src\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o .\
 .\DFLegacy.Server.exe
 ```
 
+若端口被残留的服务端进程占用（启动报 `AddressAlreadyInUseException`），可运行仓库根目录的 `stop.bat` 结束 `DFLegacy.Server.exe` 并确认端口已释放。
+
 更新前备份数据，避免覆盖现有存档。不要同时启动多个实例写入同一份状态文件。
 
 ## 常用配置
