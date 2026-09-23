@@ -24,7 +24,8 @@ public sealed record PacketTraceSnapshot(
     uint DeclaredCrc32,
     bool HasValidCrc32,
     string BodyHex,
-    bool BodyTruncated);
+    bool BodyTruncated,
+    string? PacketName = null);
 
 public sealed class RuntimeSession
 {
@@ -77,6 +78,7 @@ public sealed class RuntimeState
     public void TracePacket(RuntimeSession session, string direction, PacketFrame frame, int dumpLimit)
     {
         var dumpLength = Math.Min(frame.Body.Length, Math.Max(0, dumpLimit));
+        PacketNames.TryGet(frame.Type, frame.ProtocolId, out var packetName);
         _recentPackets.Enqueue(new PacketTraceSnapshot(
             DateTimeOffset.Now,
             session.Id,
@@ -89,7 +91,8 @@ public sealed class RuntimeState
             frame.DeclaredCrc32,
             frame.HasValidCrc32,
             Convert.ToHexString(frame.Body.AsSpan(0, dumpLength)),
-            frame.Body.Length > dumpLength));
+            frame.Body.Length > dumpLength,
+            packetName));
 
         while (_recentPackets.Count > MaximumRecentPackets)
         {
@@ -100,6 +103,7 @@ public sealed class RuntimeState
     public void TracePacket(RuntimeSession session, string direction, GameServerPacket packet, int dumpLimit)
     {
         var dumpLength = Math.Min(packet.Payload.Length, Math.Max(0, dumpLimit));
+        PacketNames.TryGet(packet.Type, packet.ProtocolId, out var packetName);
         _recentPackets.Enqueue(new PacketTraceSnapshot(
             DateTimeOffset.Now,
             session.Id,
@@ -112,7 +116,8 @@ public sealed class RuntimeState
             0,
             true,
             Convert.ToHexString(packet.Payload.AsSpan(0, dumpLength)),
-            packet.Payload.Length > dumpLength));
+            packet.Payload.Length > dumpLength,
+            packetName));
 
         while (_recentPackets.Count > MaximumRecentPackets)
         {

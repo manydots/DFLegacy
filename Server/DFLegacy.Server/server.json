@@ -55,6 +55,6 @@
     "MaximumPacketLength": 4194304,
     "RejectBadCrc32": false,
     "EnablePacketTracing": true,
-    "HexDumpLimit": 64
+    "HexDumpLimit": 256
   }
 }

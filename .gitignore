@@ -12,5 +12,6 @@ tools/__pycache__/
 tools/pydeps/
 *.user
 *.log
+/tools
 /docs
 AGENTS.md

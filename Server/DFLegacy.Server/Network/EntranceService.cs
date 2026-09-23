@@ -2394,8 +2394,10 @@ public sealed class EntranceService(
                         break;
                     }
 
+                    PacketFrame? rawFrame = null;
                     if (isChannelPort)
                     {
+                        rawFrame = request; // wire bytes before seed decryption
                         if (!gameClientCipher!.TryDecode(request, out var decodedRequest))
                         {
                             LogPacket("RX-ENC", runtimeSession, request);
@@ -2413,7 +2415,7 @@ public sealed class EntranceService(
 
                     runtime.CountPacket(runtimeSession);
                     runtimeSession.LastProtocolId = request.ProtocolId;
-                    LogPacket("RX", runtimeSession, request);
+                    LogPacket("RX", runtimeSession, request, rawFrame);
 
                     if (options.RejectBadCrc32 && !request.HasValidCrc32)
                     {
@@ -14229,20 +14231,58 @@ public sealed class EntranceService(
         GameServerPacket Reply,
         bool RefreshWarehouse);
 
-    private void LogPacket(string direction, RuntimeSession session, PacketFrame frame)
+    private static string ToSpacedHex(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        return string.Create(bytes.Length * 3 - 1, bytes.ToArray(), (span, buffer) =>
+        {
+            const string HexChars = "0123456789ABCDEF";
+            for (var i = 0; i < buffer.Length; i++)
+            {
+                span[i * 3] = HexChars[buffer[i] >> 4];
+                span[i * 3 + 1] = HexChars[buffer[i] & 0xF];
+                if (i < buffer.Length - 1)
+                {
+                    span[i * 3 + 2] = ' ';
+                }
+            }
+        });
+    }
+
+    private void LogPacket(string direction, RuntimeSession session, PacketFrame frame, PacketFrame? rawFrame = null)
     {
         if (!options.EnablePacketTracing)
         {
             return;
         }
 
-        var dumpLength = Math.Min(frame.Body.Length, options.HexDumpLimit);
-        var dump = Convert.ToHexString(frame.Body.AsSpan(0, dumpLength));
+        var bodyLimit = Math.Min(frame.Body.Length, options.HexDumpLimit);
+        var body = ToSpacedHex(frame.Body.AsSpan(0, bodyLimit));
+        var wire = (rawFrame ?? frame).Encode();
+        var rawLimit = Math.Min(wire.Length, options.HexDumpLimit + PacketFrame.HeaderLength);
+        var raw = ToSpacedHex(wire.AsSpan(0, rawLimit));
         runtime.TracePacket(session, direction, frame, options.HexDumpLimit);
+        string? plainText = null;
+        try
+        {
+            plainText = PacketPlainText.Decode(frame.Type, frame.ProtocolId, frame.Body);
+        }
+        catch
+        {
+            // Tracing must never break the session.
+        }
+
+        var idLabel = frame.Type == GameProtocolEngine.NotificationPacketType ? "NOTI" : "CMD";
         logger.LogInformation(
-            "{Direction} {SessionId} type={Type} protocol={Protocol} length={Length} records={Records} crc={Crc:X8} valid={Valid} body={Body}{Suffix}",
-            direction, session.Id, frame.Type, frame.ProtocolId, frame.TotalLength, frame.RecordCount,
-            frame.DeclaredCrc32, frame.HasValidCrc32, dump, frame.Body.Length > dumpLength ? "..." : "");
+            "{IdLabel} [{SessionId}] Packet={Id}({IdHex}) len={Length} body=({BodyLen}B) [{Body}]{BodySuffix} crc={Crc:X8} valid={Valid} text={Text}\n  raw: {Raw}{RawSuffix}",
+            idLabel, session.Id, frame.ProtocolId, $"0x{frame.ProtocolId:X2}",
+            frame.TotalLength, frame.Body.Length, body, frame.Body.Length > bodyLimit ? "..." : "",
+            frame.DeclaredCrc32, frame.HasValidCrc32, plainText ?? "-",
+            raw, wire.Length > rawLimit ? "..." : "");
     }
 
     private void LogPacket(string direction, RuntimeSession session, GameServerPacket packet)
@@ -14252,12 +14292,28 @@ public sealed class EntranceService(
             return;
         }
 
-        var dumpLength = Math.Min(packet.Payload.Length, options.HexDumpLimit);
-        var dump = Convert.ToHexString(packet.Payload.AsSpan(0, dumpLength));
+        var payloadLimit = Math.Min(packet.Payload.Length, options.HexDumpLimit);
+        var payloadDump = ToSpacedHex(packet.Payload.AsSpan(0, payloadLimit));
+        var wire = packet.Encode();
+        var rawLimit = Math.Min(wire.Length, options.HexDumpLimit + GameServerPacket.HeaderLength);
+        var raw = ToSpacedHex(wire.AsSpan(0, rawLimit));
         runtime.TracePacket(session, direction, packet, options.HexDumpLimit);
+        string? plainText = null;
+        try
+        {
+            plainText = PacketPlainText.DecodeServer(packet.Type, packet.ProtocolId, packet.Payload);
+        }
+        catch
+        {
+            // Tracing must never break the session.
+        }
+
+        var idLabel = packet.Type == GameProtocolEngine.NotificationPacketType ? "NOTI" : "CMD";
         logger.LogInformation(
-            "{Direction} {SessionId} game-server type={Type} protocol={Protocol} length={Length} payload={Payload}{Suffix}",
-            direction, session.Id, packet.Type, packet.ProtocolId, packet.TotalLength,
-            dump, packet.Payload.Length > dumpLength ? "..." : "");
+            "{IdLabel} [{SessionId}] Packet={Id}({IdHex}) len={Length} body=({BodyLen}B) [{Body}]{BodySuffix} text={Text}\n  raw: {Raw}{RawSuffix}",
+            idLabel, session.Id, packet.ProtocolId, $"0x{packet.ProtocolId:X2}",
+            packet.TotalLength, packet.Payload.Length, payloadDump, packet.Payload.Length > payloadLimit ? "..." : "",
+            plainText ?? "-",
+            raw, wire.Length > rawLimit ? "..." : "");
     }
 }
