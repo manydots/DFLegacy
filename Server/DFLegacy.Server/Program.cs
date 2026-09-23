@@ -4,7 +4,16 @@ using System.Text.Json;
 using DFLegacy.Protocol;
 using DFLegacy.Server;
 
-var builder = WebApplication.CreateBuilder(args);
+// 组合根：配置与数据锚点（R5）。优先级 --home <path> > DFLEGACY_HOME > BaseDirectory。
+var homeAnchor = PathResolver.ResolveHome(args);
+// wwwroot 锚定到 home：内容根默认跟随进程工作目录，换目录启动会丢静态
+// 文件（管理后台、client_pay 等）。主机级设置只能在 CreateBuilder 时传入，
+// 事后改 WebHost 会抛 NotSupportedException。
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    WebRootPath = Path.Combine(homeAnchor, "wwwroot")
+});
 // The default Windows Event Log provider can require an administrator-created
 // event source. This emulator must be runnable as a normal desktop user.
 builder.Logging.ClearProviders();
@@ -14,8 +23,6 @@ builder.Logging.AddSimpleConsole(console =>
     console.TimestampFormat = "HH:mm:ss ";
 });
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
-// 组合根：配置与数据锚点（R5）。优先级 --home <path> > DFLEGACY_HOME > BaseDirectory。
-var homeAnchor = PathResolver.ResolveHome(args);
 builder.Configuration.AddJsonFile(
     Path.Combine(homeAnchor, "server.json"),
     optional: false,
