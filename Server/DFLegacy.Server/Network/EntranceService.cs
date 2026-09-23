@@ -12231,9 +12231,6 @@ public sealed class EntranceService(
                             continue;
                         }
 
-                        var advertisedHost = string.IsNullOrWhiteSpace(options.GameplayDatagram.AdvertisedHost)
-                            ? options.GameplayDatagram.Host
-                            : options.GameplayDatagram.AdvertisedHost.Trim();
                         var gameReply = request.Type == GameProtocolEngine.CommandPacketType
                             && request.ProtocolId == GameProtocolEngine.CheckConnectionCommand
                             ? GameProtocolEngine.CreateChannelInfo(
@@ -12243,7 +12240,7 @@ public sealed class EntranceService(
                                 serverId: 1,
                                 channelNumber: checked((byte)options.Channel.ChannelNumber),
                                 seed: checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-                                [Encoding.ASCII.GetBytes(advertisedHost)],
+                                [Encoding.ASCII.GetBytes(options.GameplayDatagram.Host)],
                                 port1: checked((uint)options.GameplayDatagram.PrimaryPort),
                                 port2: checked((uint)options.GameplayDatagram.SecondaryPort))
                             : GameProtocolEngine.Handle(request, protocolSession.SessionToken);

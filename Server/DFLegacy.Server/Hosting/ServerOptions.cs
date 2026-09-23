@@ -28,11 +28,6 @@ public sealed class GameplayDatagramOptions
 {
     public bool Enabled { get; set; } = true;
     public string Host { get; set; } = "127.0.0.1";
-
-    // 广播给客户端的游戏服务器地址（ChannelInfo）。Host 还承担 UDP 绑定职责，
-    // NAT/EIP 部署下网卡上没有公网 IP 时无法绑定，只能用该字段单独给出广播地址；
-    // 为空时回退到 Host。
-    public string AdvertisedHost { get; set; } = "";
     public int PrimaryPort { get; set; } = 7002;
     public int SecondaryPort { get; set; } = 7003;
     public ushort MonsterObjectType { get; set; } = 0x0211;
