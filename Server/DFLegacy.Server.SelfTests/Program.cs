@@ -23,6 +23,8 @@ AvatarCompoundSmokeTests.Run(Check);
 WorldMapSmokeTests.Run(Check);
 DungeonClearExperienceSmokeTests.Run(Check);
 ItemSealingSmokeTests.Run(Check);
+AntibotReportSmokeTests.Run(Check);
+MegaphoneSmokeTests.Run(Check);
 await CompoundItemSmokeTests.RunAsync(Check);
 await EquipmentQualitySmokeTests.RunAsync(Check);
 

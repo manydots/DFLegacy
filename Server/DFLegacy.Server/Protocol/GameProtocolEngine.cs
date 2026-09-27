@@ -304,6 +304,7 @@ public static class GameProtocolEngine
     public const byte CreatureMessageNotification = 126;
     public const byte BossDieCheckNotification = 127;
     public const byte CreatureScriptMessageNotification = 131;
+    public const byte MegaphoneMessageNotification = 130;
     public const byte EnterGameWorldCompleteNotification = 136;
     public const byte CommandPacketType = 1;
     public const byte CheckConnectionCommand = 0;
@@ -362,6 +363,8 @@ public static class GameProtocolEngine
     public const byte PrivateStorePollCommand = 82;
     public const byte UpgradeItemCommand = 83;
     public const byte ResetItemAttributeCommand = 84;
+    // 60CN ENUM_CMDPACKET_ANTIBOT: fire-and-forget client health report.
+    public const byte AntibotCommand = 161;
     public const byte MailboxSendCommand = 97;
     public const byte MailboxExtractItemCommand = 98;
     public const byte MailboxOpenCommand = 99;
@@ -1279,6 +1282,44 @@ public static class GameProtocolEngine
             messageType,
             targetAreaUserId,
             messageBytes);
+
+    public static GameServerPacket CreateMegaphoneNotification(
+        GameMessageType messageType,
+        byte ownerFlag,
+        ushort targetAreaUserId,
+        ReadOnlySpan<byte> senderName,
+        ReadOnlySpan<byte> messageBytes)
+    {
+        // NOTI 130 is read by DNF.exe case 130 (sub_419420 @0x427414) with
+        // the global-cursor dstr reader sub_8B3250: a length of zero or at
+        // least the destination capacity leaves the cursor unadvanced and
+        // shifts every later field, so the caps below are hard requirements.
+        // Flag byte matching the local player routes the message to the chat
+        // window; any other value renders the speaker banner (0xFF00F2FF).
+        if (senderName.Length is < 1 or >= 0x1E)
+        {
+            throw new ArgumentOutOfRangeException(nameof(senderName));
+        }
+
+        if (messageBytes.Length is < 1 or >= 0x200)
+        {
+            throw new ArgumentOutOfRangeException(nameof(messageBytes));
+        }
+
+        using var payload = new MemoryStream();
+        using var writer = new BinaryWriter(payload);
+        writer.Write((byte)messageType);
+        writer.Write(ownerFlag);
+        writer.Write(targetAreaUserId);
+        writer.Write((uint)senderName.Length);
+        writer.Write(senderName);
+        writer.Write((uint)messageBytes.Length);
+        writer.Write(messageBytes);
+        return new GameServerPacket(
+            NotificationPacketType,
+            MegaphoneMessageNotification,
+            payload.ToArray());
+    }
 
     private static GameServerPacket CreateChatMessageNotification(
         byte notificationId,

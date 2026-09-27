@@ -28,13 +28,13 @@
 | 模块 | 作用 |
 | --- | --- |
 | `DFLegacy.Server` | 主业务、PVF 数据读取、账号角色持久化、TCP/UDP 服务及 HTTP 管理接口。 |
-| `DFLegacy.Protocol` | 登录与通信协议的编解码、请求解析、响应与通知包构建。 |
+| `Server/DFLegacy.Server/Protocol` | 登录与通信协议的编解码、请求解析、响应与通知包构建。 |
 | `DFLegacy.Launcher` | Windows 启动器，管理登录配置、检查运行环境、安装 IJL15 模块并启动客户端，可按需启动本地服务端。 |
 | `DFLegacy.Ijl15` | 32 位 C++ `ijl15.dll` 兼容模块，提供客户端所需的 JPEG 功能及进程内兼容补丁、窗口缩放等功能。 |
 | `DFLegacy.RandomNative` | 64 位 C++ 硬件随机种子桥接，为玩法随机提供 RDSEED 支持；不支持该指令时自动回退，不是运行必需项。 |
 | `wwwroot/admin` | 独立的中文后台管理页面，使用现代浏览器访问，不依赖前端构建工具。 |
 | `wwwroot/client` | 充值及会员服务页面，与后台管理页面分离。 |
-| `tests/DFLegacy.SmokeTests` | 协议、数据解析和主要业务规则的冒烟测试。 |
+| `Server/DFLegacy.Server.SelfTests` | 协议、数据解析和主要业务规则的冒烟测试。 |
 
 ## 当前实现
 
@@ -87,8 +87,8 @@ msbuild .\DFLegacy.Emulator.slnx /m /restore /p:Configuration=Release
 发布服务端与启动器到同一目录：
 
 ```powershell
-dotnet publish .\src\DFLegacy.Server\DFLegacy.Server.csproj -c Release -o .\dist\DFLegacy.Server
-dotnet publish .\src\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o .\dist\DFLegacy.Server
+dotnet publish .\Server\DFLegacy.Server\DFLegacy.Server.csproj -c Release -o .\dist\DFLegacy.Server
+dotnet publish .\Client\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o .\dist\DFLegacy.Server
 ```
 
 以上构建与发布步骤可由仓库根目录的 `publish.bat` 一键完成：脚本优先使用 PATH 上的 MSBuild，否则通过 vswhere 自动定位 Visual Studio 自带的 MSBuild；构建成功后、发布前会清空 `dist` 输出目录（其中如有 `data` 存档也会一并删除），任一步失败即停止并返回非零退出码。
@@ -162,8 +162,10 @@ EnableMouseWheel=1
 运行主要业务冒烟测试：
 
 ```powershell
-dotnet run --project .\tests\DFLegacy.SmokeTests\DFLegacy.SmokeTests.csproj -c Release
+dotnet run --project .\Server\DFLegacy.Server.SelfTests\DFLegacy.Server.SelfTests.csproj -c Release
 ```
+
+全部通过时末尾输出 `All DFLegacy protocol smoke tests passed.`，退出码为 0。
 
 ## 许可证
 

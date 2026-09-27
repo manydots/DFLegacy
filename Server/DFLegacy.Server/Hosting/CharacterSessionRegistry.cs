@@ -25,6 +25,7 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
         Action<uint>? ceraInfo = null,
         Action? fatigueReset = null,
         Action<GameMessageType, ushort, byte[]>? messageNotification = null,
+        Action<GameMessageType, byte, ushort, byte[], byte[]>? megaphoneNotification = null,
         Action<byte[]>? popupNotification = null,
         Action<byte>? weaknessRecovery = null,
         Action<ushort, byte>? dungeonPermission = null) =>
@@ -40,6 +41,7 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
             ceraInfo,
             fatigueReset,
             messageNotification,
+            megaphoneNotification,
             popupNotification,
             weaknessRecovery,
             dungeonPermission);
@@ -54,6 +56,7 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
         Action<uint>? ceraInfo = null,
         Action? fatigueReset = null,
         Action<GameMessageType, ushort, byte[]>? messageNotification = null,
+        Action<GameMessageType, byte, ushort, byte[], byte[]>? megaphoneNotification = null,
         Action<byte[]>? popupNotification = null,
         Action<byte>? weaknessRecovery = null,
         Action<ushort, byte>? dungeonPermission = null)
@@ -68,6 +71,7 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
             ceraInfo,
             fatigueReset,
             messageNotification,
+            megaphoneNotification,
             popupNotification,
             weaknessRecovery,
             dungeonPermission);
@@ -83,6 +87,7 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
         Action<uint>? ceraInfo = null,
         Action? fatigueReset = null,
         Action<GameMessageType, ushort, byte[]>? messageNotification = null,
+        Action<GameMessageType, byte, ushort, byte[], byte[]>? megaphoneNotification = null,
         Action<byte[]>? popupNotification = null,
         Action<byte>? weaknessRecovery = null,
         Action<ushort, byte>? dungeonPermission = null)
@@ -104,6 +109,7 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
             ceraInfo,
             fatigueReset,
             messageNotification,
+            megaphoneNotification,
             popupNotification,
             weaknessRecovery,
             dungeonPermission);
@@ -121,6 +127,7 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
         Action<uint>? ceraInfo,
         Action? fatigueReset,
         Action<GameMessageType, ushort, byte[]>? messageNotification,
+        Action<GameMessageType, byte, ushort, byte[], byte[]>? megaphoneNotification,
         Action<byte[]>? popupNotification,
         Action<byte>? weaknessRecovery,
         Action<ushort, byte>? dungeonPermission)
@@ -136,6 +143,7 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
             ceraInfo,
             fatigueReset,
             messageNotification,
+            megaphoneNotification,
             popupNotification,
             weaknessRecovery,
             dungeonPermission);
@@ -401,6 +409,35 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
         return leases.Length;
     }
 
+    public int NotifyMegaphoneAll(
+        GameMessageType messageType,
+        Guid speakerSessionId,
+        byte speakerOwnerFlag,
+        ushort speakerTargetAreaUserId,
+        byte otherOwnerFlag,
+        byte[] senderName,
+        byte[] messageBytes)
+    {
+        ArgumentNullException.ThrowIfNull(senderName);
+        ArgumentNullException.ThrowIfNull(messageBytes);
+        var leases = SnapshotDistinctSessions();
+        foreach (var lease in leases)
+        {
+            // The client spawns the own-speech bubble when the packet target
+            // equals its local id, so only the speaker's copy carries it;
+            // every other session takes the banner-only routing.
+            var isSpeaker = lease.SessionId == speakerSessionId;
+            lease.NotifyMegaphone(
+                messageType,
+                isSpeaker ? speakerOwnerFlag : otherOwnerFlag,
+                isSpeaker ? speakerTargetAreaUserId : (ushort)0,
+                senderName,
+                messageBytes);
+        }
+
+        return leases.Length;
+    }
+
     public int NotifyPopupAll(byte[] messageBytes)
     {
         ArgumentNullException.ThrowIfNull(messageBytes);
@@ -444,6 +481,7 @@ public sealed class CharacterSessionLease
     private readonly Action<uint>? _ceraInfo;
     private readonly Action? _fatigueReset;
     private readonly Action<GameMessageType, ushort, byte[]>? _messageNotification;
+    private readonly Action<GameMessageType, byte, ushort, byte[], byte[]>? _megaphoneNotification;
     private readonly Action<byte[]>? _popupNotification;
     private readonly Action<byte>? _weaknessRecovery;
     private readonly Action<ushort, byte>? _dungeonPermission;
@@ -462,6 +500,7 @@ public sealed class CharacterSessionLease
         Action<uint>? ceraInfo,
         Action? fatigueReset,
         Action<GameMessageType, ushort, byte[]>? messageNotification,
+        Action<GameMessageType, byte, ushort, byte[], byte[]>? megaphoneNotification,
         Action<byte[]>? popupNotification,
         Action<byte>? weaknessRecovery,
         Action<ushort, byte>? dungeonPermission)
@@ -476,6 +515,7 @@ public sealed class CharacterSessionLease
         _ceraInfo = ceraInfo;
         _fatigueReset = fatigueReset;
         _messageNotification = messageNotification;
+        _megaphoneNotification = megaphoneNotification;
         _popupNotification = popupNotification;
         _weaknessRecovery = weaknessRecovery;
         _dungeonPermission = dungeonPermission;
@@ -526,6 +566,19 @@ public sealed class CharacterSessionLease
         ushort targetAreaUserId,
         byte[] messageBytes) =>
         _messageNotification?.Invoke(messageType, targetAreaUserId, messageBytes.ToArray());
+
+    internal void NotifyMegaphone(
+        GameMessageType messageType,
+        byte ownerFlag,
+        ushort targetAreaUserId,
+        byte[] senderName,
+        byte[] messageBytes) =>
+        _megaphoneNotification?.Invoke(
+            messageType,
+            ownerFlag,
+            targetAreaUserId,
+            senderName.ToArray(),
+            messageBytes.ToArray());
 
     internal void NotifyPopup(byte[] messageBytes) =>
         _popupNotification?.Invoke(messageBytes.ToArray());

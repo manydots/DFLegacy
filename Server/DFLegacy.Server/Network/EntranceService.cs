@@ -41,6 +41,8 @@ public sealed class EntranceService(
 {
     private const ushort RiverLetheItemId = 3;
     private const ushort RiverLetheBellItemId = 28;
+    private const ushort ServerMegaphoneItemId = 36;
+    private const ushort ChannelMegaphoneItemId = 37;
     private const ushort FatigueRecoveryItemId = 7_518;
     private const ushort LevelUpCouponItemId = 7_519;
     private const ushort FatigueRecoveryUseThreshold = 126;
@@ -391,6 +393,43 @@ public sealed class EntranceService(
                         logger.LogWarning(
                             exception,
                             "Could not send popup notification to character {CharacterId}.",
+                            activeCharacter?.Id);
+                    }
+                }
+
+                async Task SendMegaphoneNotificationAsync(
+                    GameMessageType messageType,
+                    byte ownerFlag,
+                    ushort targetAreaUserId,
+                    byte[] senderName,
+                    byte[] messageBytes)
+                {
+                    try
+                    {
+                        if (activeCharacter is null)
+                        {
+                            return;
+                        }
+
+                        var megaphoneNotification =
+                            GameProtocolEngine.CreateMegaphoneNotification(
+                                messageType,
+                                ownerFlag,
+                                targetAreaUserId,
+                                senderName,
+                                messageBytes);
+                        await megaphoneNotification.WriteAsync(stream, serverToken);
+                        Interlocked.Increment(ref runtimeSession.SentPackets);
+                        LogPacket("TX", runtimeSession, megaphoneNotification);
+                    }
+                    catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
+                    {
+                    }
+                    catch (Exception exception)
+                    {
+                        logger.LogWarning(
+                            exception,
+                            "Could not send megaphone notification to character {CharacterId}.",
                             activeCharacter?.Id);
                     }
                 }
@@ -2651,15 +2690,10 @@ public sealed class EntranceService(
                             Interlocked.Increment(ref runtimeSession.SentPackets);
                             LogPacket("TX", runtimeSession, returnReply);
 
-                            // DFLegacy does not issue a separate GET_USERINFO
-                            // after every town-side return. Refresh the roster
-                            // immediately after the command acknowledgement.
-                            var userInfo = await CreateUserInfoAsync(
-                                accountUid,
-                                serverToken);
-                            await userInfo.WriteAsync(stream, serverToken);
-                            Interlocked.Increment(ref runtimeSession.SentPackets);
-                            LogPacket("TX", runtimeSession, userInfo);
+                            // The 60CN client refreshes the roster itself with a
+                            // GET_USERINFO (CMD 8) right after this acknowledgement;
+                            // pushing the roster here too arrives as a second list
+                            // and makes the select-screen event notice pop up twice.
                             logger.LogInformation(
                                 "Returned character {CharacterId} to character selection for account {Account}.",
                                 returningCharacterId,
@@ -2729,6 +2763,13 @@ public sealed class EntranceService(
                                     _ = SendTypedMessageNotificationAsync(
                                         messageType,
                                         targetAreaUserId,
+                                        messageBytes),
+                                (messageType, ownerFlag, targetAreaUserId, senderName, messageBytes) =>
+                                    _ = SendMegaphoneNotificationAsync(
+                                        messageType,
+                                        ownerFlag,
+                                        targetAreaUserId,
+                                        senderName,
                                         messageBytes),
                                 messageBytes =>
                                     _ = SendPopupNotificationAsync(messageBytes),
@@ -3338,6 +3379,108 @@ public sealed class EntranceService(
                                     "Rejected malformed SEND_MESSAGE request for character {CharacterId}: body={Body}.",
                                     activeCharacter?.Id,
                                     Convert.ToHexString(request.Body));
+                                continue;
+                            }
+
+                            // Speaker megaphones (PVF items 36/37) are used
+                            // through CMD 17 rather than USE_STACKABLE: the
+                            // request names the megaphone slot so the server
+                            // consumes the stack and rebroadcasts the text as
+                            // NOTI 130. Wire layout:
+                            // docs/protocol/new-packet-formats-60cn.md §1.
+                            if (messageRequest.MessageType
+                                is (byte)GameMessageType.Type13SpeakerYellow
+                                or (byte)GameMessageType.Type14SpeakerYellow
+                                or (byte)GameMessageType.Type15SpeakerYellow)
+                            {
+                                // The slot content is authoritative: items 36
+                                // (server megaphone) and 37 (channel megaphone)
+                                // are both accepted whichever speaker type the
+                                // client picked, so the type-to-item mapping
+                                // cannot drift from the PVF.
+                                if (messageRequest.SlotOrReserved > ushort.MaxValue
+                                    || !mainInventory.TryGetValue(
+                                        (ushort)messageRequest.SlotOrReserved,
+                                        out var megaphoneItem)
+                                    || megaphoneItem.ItemId
+                                        is not (ServerMegaphoneItemId
+                                            or ChannelMegaphoneItemId)
+                                    || megaphoneItem.CountOrValue == 0)
+                                {
+                                    await SendPopupNotificationAsync(
+                                        ClientEncoding.GetBytes("喇叭使用失败，请确认道具状态"));
+                                    logger.LogWarning(
+                                        "Rejected megaphone message type {MessageType} from character {CharacterId}; target={TargetOrItemSpace}, slot/reserved={SlotOrReserved}.",
+                                        messageRequest.MessageType,
+                                        activeCharacter.Id,
+                                        messageRequest.TargetOrItemSpace,
+                                        messageRequest.SlotOrReserved);
+                                    continue;
+                                }
+
+                                var megaphoneSlot = (ushort)messageRequest.SlotOrReserved;
+                                var remainingCount = megaphoneItem.CountOrValue - 1;
+                                if (remainingCount == 0)
+                                {
+                                    mainInventory.Remove(megaphoneSlot);
+                                }
+                                else
+                                {
+                                    mainInventory[megaphoneSlot] = megaphoneItem with
+                                    {
+                                        CountOrValue = remainingCount
+                                    };
+                                }
+
+                                activeCharacter = await store.SaveCharacterInventoryAsync(
+                                    accountName,
+                                    activeCharacter.Id,
+                                    currentGold,
+                                    mainInventory.Values,
+                                    equippedInventory.Values,
+                                    serverToken) ?? activeCharacter;
+
+                                var megaphoneEntry = remainingCount == 0
+                                    ? new GameInventoryEntry(megaphoneSlot, ushort.MaxValue, 0)
+                                    : ToGameInventoryEntry(mainInventory[megaphoneSlot]);
+                                var megaphoneInventoryUpdate =
+                                    GameProtocolEngine.CreateUpdateItemList(
+                                        0,
+                                        [megaphoneEntry]);
+                                await megaphoneInventoryUpdate.WriteAsync(stream, serverToken);
+                                Interlocked.Increment(ref runtimeSession.SentPackets);
+                                LogPacket("TX", runtimeSession, megaphoneInventoryUpdate);
+
+                                // Routing per client case 130 (0x427518): the
+                                // packet flag is compared with the local channel
+                                // number — equal renders the chat line
+                                // ("频道N name : msg") and, when the packet
+                                // target equals the local uid, the own-speech
+                                // bubble above the head; unequal renders the
+                                // banner with the flag formatted as a channel
+                                // number, so a second, flag-less copy would
+                                // double-display and show a bogus "频道0".
+                                // Every client here is in the configured
+                                // channel, so one broadcast with the channel
+                                // flag plus the speaker's uid is a single,
+                                // correctly labeled display with the bubble.
+                                var megaphoneRecipients =
+                                    characterSessions.NotifyMegaphoneAll(
+                                        (GameMessageType)messageRequest.MessageType,
+                                        runtimeSession.Id,
+                                        checked((byte)options.Channel.ChannelNumber),
+                                        localUserId,
+                                        options.Channel.ChannelNumber == 0 ? (byte)1 : (byte)0,
+                                        ClientEncoding.GetBytes(activeCharacter.Name),
+                                        messageRequest.MessageBytes);
+                                logger.LogInformation(
+                                    "Megaphone type {MessageType} from {CharacterName} (slot {Slot}, stack remaining {Remaining}) broadcast to {Recipients} sessions: {Message}",
+                                    messageRequest.MessageType,
+                                    activeCharacter.Name,
+                                    megaphoneSlot,
+                                    remainingCount,
+                                    megaphoneRecipients,
+                                    ClientEncoding.GetString(messageRequest.MessageBytes));
                                 continue;
                             }
 
@@ -5826,6 +5969,10 @@ public sealed class EntranceService(
                             Interlocked.Increment(ref runtimeSession.SentPackets);
                             LogPacket("TX", runtimeSession, sortReply);
 
+                            // The 60CN client's incremental item path (listType
+                            // != 3) ignores 0xFFFF tombstones and announces adds,
+                            // so a relocation can only be conveyed by the full
+                            // list rebuild (NOTI 13), which is silent.
                             var sortedPackets = itemSpace switch
                             {
                                 0 => [CreateMainInventoryPacket(
@@ -12233,6 +12380,25 @@ public sealed class EntranceService(
                             continue;
                         }
 
+                        if (request.Type == GameProtocolEngine.CommandPacketType
+                            && request.ProtocolId == GameProtocolEngine.AntibotCommand)
+                        {
+                            // Fire-and-forget client report: the heartbeat counter
+                            // advances without any answer ever coming back, so the
+                            // report is consumed quietly instead of tripping the
+                            // unknown-packet warning once per minute.
+                            var parsedAntibot = AntibotReportParser.TryParse(
+                                request.Body,
+                                out var antibotReport);
+                            logger.LogDebug(
+                                "Antibot report seq={Seq} parsed={Parsed} kind={Kind} declaredBytes={Bytes}.",
+                                antibotReport.Sequence,
+                                parsedAntibot,
+                                antibotReport.RecordKind,
+                                antibotReport.DeclaredLength);
+                            continue;
+                        }
+
                         var gameReply = request.Type == GameProtocolEngine.CommandPacketType
                             && request.ProtocolId == GameProtocolEngine.CheckConnectionCommand
                             ? GameProtocolEngine.CreateChannelInfo(
@@ -14277,10 +14443,14 @@ public sealed class EntranceService(
         }
 
         var idLabel = frame.Type == GameProtocolEngine.NotificationPacketType ? "NOTI" : "CMD";
+        // Received command bodies are the TryDecode product (the wire carries
+        // the client's rolling-transform ciphertext); server-built frames are
+        // plaintext, so only RX keeps the decode label.
+        var bodyLabel = direction == "RX" ? "TryDecodeBody" : "body";
         logger.LogInformation(
-            "{IdLabel} [{SessionId}] Packet={Id}({IdHex}) len={Length} body=({BodyLen}B) [{Body}]{BodySuffix} crc={Crc:X8} valid={Valid} text={Text}\n  raw: {Raw}{RawSuffix}",
+            "{IdLabel} [{SessionId}] Packet={Id}({IdHex}) len={Length} {BodyLabel}=({BodyLen}B) [{Body}]{BodySuffix} crc={Crc:X8} valid={Valid} text={Text}\n  raw: {Raw}{RawSuffix}",
             idLabel, session.Id, frame.ProtocolId, $"0x{frame.ProtocolId:X2}",
-            frame.TotalLength, frame.Body.Length, body, frame.Body.Length > bodyLimit ? "..." : "",
+            frame.TotalLength, bodyLabel, frame.Body.Length, body, frame.Body.Length > bodyLimit ? "..." : "",
             frame.DeclaredCrc32, frame.HasValidCrc32, plainText ?? "-",
             raw, wire.Length > rawLimit ? "..." : "");
     }
