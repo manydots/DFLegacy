@@ -13,8 +13,23 @@ public sealed class GameplayDatagramService(
     private readonly ConcurrentDictionary<Guid, GameplaySession> _sessions = new();
     private readonly ConcurrentDictionary<string, IPEndPoint> _observedByAddress = new();
     private readonly ConcurrentDictionary<string, Guid> _sessionsByEndpoint = new();
+    private Func<Guid, IReadOnlyList<Guid>?>? _relayResolver;
     private UdpClient? _primary;
     private UdpClient? _secondary;
+
+    /// <summary>
+    /// Registers the resolver that maps a datagram sender's session to the
+    /// peer sessions its gameplay datagrams must be relayed to. Party
+    /// real-time traffic flows through this server relay because direct
+    /// client-to-client UDP is routinely dropped by client firewalls; the
+    /// party endpoint table (NOTI 11) advertises this server's listener for
+    /// every peer, so clients only ever talk to it.
+    /// </summary>
+    public void SetRelayResolver(Func<Guid, IReadOnlyList<Guid>?> resolver)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+        _relayResolver = resolver;
+    }
 
     public void RegisterChannelSession(RuntimeSession runtimeSession, IPAddress tcpAddress)
     {
@@ -146,15 +161,12 @@ public sealed class GameplayDatagramService(
             application);
         await _primary.SendAsync(datagram, endpoint, cancellationToken);
         Interlocked.Increment(ref session.Runtime.SentPackets);
-        if (options.EnablePacketTracing)
-        {
-            runtime.TraceDatagram(
-                session.Runtime,
-                "TX-UDP",
-                datagram,
-                options.HexDumpLimit,
-                protocolId: (byte)GameDatagramProtocol.SetActiveObjectHpProtocol);
-        }
+        runtime.TraceDatagram(
+            session.Runtime,
+            "TX-UDP",
+            datagram,
+            options.HexDumpLimit,
+            protocolId: (byte)GameDatagramProtocol.SetActiveObjectHpProtocol);
 
         logger.LogInformation(
             "UDP protocol 12 sent to {Endpoint}: sequence={Sequence} sender={Sender} object={ObjectType}:{ObjectId} hp={Hp} secondary={Secondary}",
@@ -239,15 +251,16 @@ public sealed class GameplayDatagramService(
                     remote,
                     out var response))
             {
-                ObserveEndpoint(remote);
+                var firstContact = ObserveEndpoint(remote);
                 await listener.SendAsync(response, remote, cancellationToken);
                 TraceDatagram(remote, datagram, "RX-UDP-NAT");
                 TraceDatagram(remote, response, "TX-UDP-NAT", countReceived: false);
-                logger.LogDebug(
-                    "Handled gameplay UDP NAT probe {ProbeType} on {Listener} from {Remote}",
+                logger.LogInformation(
+                    "Gameplay UDP NAT probe (type {ProbeType}) on {Listener} from {Remote}{FirstContact}",
                     datagram[0],
                     listenerName,
-                    remote);
+                    remote,
+                    firstContact ? " [first contact: endpoint registered for relay]" : "");
                 continue;
             }
 
@@ -263,14 +276,82 @@ public sealed class GameplayDatagramService(
             }
 
             TraceDatagram(remote, datagram, "RX-UDP");
+            logger.LogInformation(
+                "Gameplay UDP datagram from {Remote}: {Length} bytes, head {Head}",
+                remote,
+                datagram.Length,
+                Convert.ToHexString(datagram, 0, Math.Min(datagram.Length, 16)));
+            RelayDatagram(listener, remote, datagram, cancellationToken);
             LogMtUdpBlocks(remote, datagram);
         }
     }
 
-    private void ObserveEndpoint(IPEndPoint remote)
+    /// <summary>
+    /// Forwards one client's gameplay datagram to its relay peers' observed
+    /// UDP endpoints through the same listener, so replies hairpin through
+    /// the server exactly like the advertised endpoint table expects.
+    /// </summary>
+    private void RelayDatagram(
+        UdpClient listener,
+        IPEndPoint remote,
+        byte[] datagram,
+        CancellationToken cancellationToken)
+    {
+        if (_relayResolver is null
+            || !_sessionsByEndpoint.TryGetValue(
+                EndpointKey(remote),
+                out var senderSessionId))
+        {
+            logger.LogInformation(
+                "Gameplay UDP datagram from {Remote} could not be attributed to a session; not relaying.",
+                remote);
+            return;
+        }
+
+        var peers = _relayResolver(senderSessionId);
+        if (peers is null)
+        {
+            logger.LogInformation(
+                "Gameplay UDP datagram from session {SenderSessionId} has no relay peers (not in a party).",
+                senderSessionId);
+            return;
+        }
+
+        foreach (var peerSessionId in peers)
+        {
+            if (peerSessionId == senderSessionId
+                || !_sessions.TryGetValue(peerSessionId, out var peer))
+            {
+                continue;
+            }
+
+            IPEndPoint endpoint;
+            lock (peer.Gate)
+            {
+                if (peer.DatagramEndpoint is null)
+                {
+                    continue;
+                }
+
+                endpoint = peer.DatagramEndpoint;
+            }
+
+            _ = listener.SendAsync(datagram, endpoint, cancellationToken);
+            Interlocked.Increment(ref peer.Runtime.SentPackets);
+            logger.LogInformation(
+                "Relayed a {Length}-byte gameplay datagram (head {Head}) from session {SenderSessionId} to {Endpoint}.",
+                datagram.Length,
+                Convert.ToHexString(datagram, 0, Math.Min(datagram.Length, 8)),
+                senderSessionId,
+                endpoint);
+        }
+    }
+
+    private bool ObserveEndpoint(IPEndPoint remote)
     {
         var addressKey = AddressKey(remote.Address);
         var observed = new IPEndPoint(remote.Address.MapToIPv4(), remote.Port);
+        var firstContact = !_observedByAddress.ContainsKey(addressKey);
         _observedByAddress[addressKey] = observed;
 
         foreach (var session in _sessions.Values)
@@ -288,6 +369,8 @@ public sealed class GameplayDatagramService(
                 SetDatagramEndpoint(session, observed);
             }
         }
+
+        return firstContact;
     }
 
     private IPEndPoint? SelectDatagramEndpoint(
@@ -354,14 +437,11 @@ public sealed class GameplayDatagramService(
             Interlocked.Increment(ref session.Runtime.SentPackets);
         }
 
-        if (options.EnablePacketTracing)
-        {
-            runtime.TraceDatagram(
-                session.Runtime,
-                direction,
-                datagram,
-                options.HexDumpLimit);
-        }
+        runtime.TraceDatagram(
+            session.Runtime,
+            direction,
+            datagram,
+            options.HexDumpLimit);
     }
 
     private void LogMtUdpBlocks(IPEndPoint remote, ReadOnlySpan<byte> datagram)

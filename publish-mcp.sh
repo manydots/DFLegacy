@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Linux/macOS 发布入口（docs/design/03 · 6.1）。自探测当前平台 RID；
-# 产出与 publish.bat 等价的目录布局。PUBLISH_ALL=1 时发布全部目标。
-# DAF-MCP 模块由 publish-mcp.sh 单独发布。
+# DAF-MCP 模块单独发布入口（docs/design/09-mcp-packet-tap.md），与 publish.sh
+# 拆分。产物落在 dist/mcp-${rid}。
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -32,10 +31,19 @@ detect_rid() {
 
 publish_rid() {
     local rid="$1"
-    local out="dist/server-${rid}"
-    echo "[publish] Publishing server for ${rid} to ${out} ..."
-    dotnet publish Server/DFLegacy.Server/DFLegacy.Server.csproj \
+    local out="dist/mcp-${rid}"
+    echo "[publish-mcp] Publishing DAF-MCP module for ${rid} to ${out} ..."
+    rm -rf "${out}"
+    dotnet publish Server/DFLegacy.Mcp/DFLegacy.Mcp.csproj \
         -c Release -r "${rid}" --self-contained false -o "${out}"
+    local dll
+    for dll in DFLegacy.Mcp.dll ModelContextProtocol.Core.dll ModelContextProtocol.dll \
+               ModelContextProtocol.AspNetCore.dll Microsoft.Extensions.AI.Abstractions.dll; do
+        if [[ ! -f "${out}/${dll}" ]]; then
+            echo "[publish-mcp] Missing module DLL: ${dll}" >&2
+            exit 1
+        fi
+    done
 }
 
 if [[ "${PUBLISH_ALL:-}" == "1" ]]; then
@@ -46,4 +54,4 @@ else
     publish_rid "$(detect_rid)"
 fi
 
-echo "[publish] Done."
+echo "[publish-mcp] Done."

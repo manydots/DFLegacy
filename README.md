@@ -62,7 +62,7 @@
 
 ## 已知缺口
 
-- **多人组队** 尚未完成组队、离队、成员同步及多人副本流程。
+- **多人组队** 尚未实现组队创建、邀请、接受、退队、踢人及成员互见；多人进同一副本的协同流程亦未完成。
 - **玩家交易** 尚未实现玩家之间的物品、金币交易及双方确认流程。
 - **私人商店** 尚未实现摆摊、商品展示及玩家购买流程。
 - **社交与公会** 尚未实现好友、黑名单及完整的公会系统；战场、公会战等玩法尚未实现和验证。
@@ -91,7 +91,7 @@ dotnet publish .\Server\DFLegacy.Server\DFLegacy.Server.csproj -c Release -o .\d
 dotnet publish .\Client\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o .\dist\DFLegacy.Server
 ```
 
-以上构建与发布步骤可由仓库根目录的 `publish.bat` 一键完成：脚本优先使用 PATH 上的 MSBuild，否则通过 vswhere 自动定位 Visual Studio 自带的 MSBuild；构建成功后、发布前会清空 `dist` 输出目录（其中如有 `data` 存档也会一并删除），任一步失败即停止并返回非零退出码。
+服务端发布可由仓库根目录的 `publish.bat` 一键完成：脚本通过 .NET SDK 的 `dotnet publish` 发布到 `dist\DFLegacy.Server`，发布前会清空该输出目录，任一步失败即停止并返回非零退出码。DAF-MCP 模块由 `publish-mcp.bat` 单独发布到 `dist\DFLegacy.Mcp`，模块 DLL 需手动拷入 `dist\DFLegacy.Server` 后 MCP 才生效（未拷贝时服务端照常运行，仅不加载 MCP）。Linux/macOS 下对应使用 `publish.sh` 与 `publish-mcp.sh`。
 
 启动器发布会构建并复制 IJL15。若只构建服务端而没有 `DFLegacy.RandomNative.dll` 原生随机模块，则仍使用操作系统伪随机。
 
@@ -122,6 +122,8 @@ dotnet publish .\Client\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o
 | `ScriptPvfPath` | PVF 路径；相对路径以服务端程序目录为基准。更新 PVF 后重启服务端重新加载。 |
 | `DataPath` | 存档路径，默认 `data/state.json`，相对路径以服务端程序目录为基准。 |
 | `Admin` | HTTP 监听地址和端口，默认 `127.0.0.1:8081`。 |
+| `Mcp.Enabled` | DAF-MCP 总网关（标准 MCP 端点，供智能体实时抓包分析协议），默认 `false`。开启需发布目录存在 `DFLegacy.Mcp.dll`。 |
+| `Mcp.Host` / `Mcp.Port` | MCP 监听地址和端口，默认 `127.0.0.1:12222`。仅回环使用；改非回环等同主动暴露协议流与游戏数据。 |
 | `Entrance` / `Channel` | 登录入口和频道连接配置。 |
 | `CharacterDatagram` / `GameplayDatagram` | 客户端 UDP 监听配置。 |
 | `Drop.Enabled` | 服务端掉落总开关。 |
@@ -133,6 +135,21 @@ dotnet publish .\Client\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o
 | `EnablePacketTracing` | 协议包跟踪开关，用于排查客户端交互问题。 |
 
 默认 TCP 端口为 `2311`、`7001`、`8080`，管理 HTTP 为 `8081`；默认 UDP 端口为 `2311`、`7002`、`7003`。更改网络配置时，应同步检查启动器与频道地址。
+
+智能体（ZCode / Claude Code 等）接入 MCP 抓包：`server.json` 里把 `Mcp.Enabled` 改为 `true` 并重启服务端，然后在 MCP 客户端配置中加入：
+
+```json
+{
+  "mcpServers": {
+    "dflegacy": {
+      "type": "http",
+      "url": "http://127.0.0.1:12222/mcp"
+    }
+  }
+}
+```
+
+工具均为只读（`packet_watch` 实时跟踪、`packet_get` 取单包详情、`packet_wait` 等回包、`packet_names_search` 查包号↔报文名、`protocol_decode` 离线解码、`session_list`、`tap_status`）。详见 `docs/design/09-mcp-packet-tap.md`。
 
 ### 启动器
 

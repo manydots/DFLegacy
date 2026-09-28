@@ -68,13 +68,13 @@ public sealed class CharacterDatagramService(
         });
 
         runtime.CountPacket(session.Runtime);
+        runtime.TraceDatagram(
+            session.Runtime,
+            "RX-UDP",
+            datagram,
+            options.HexDumpLimit);
         if (options.EnablePacketTracing)
         {
-            runtime.TraceDatagram(
-                session.Runtime,
-                "RX-UDP",
-                datagram,
-                options.HexDumpLimit);
             logger.LogInformation(
                 "RX {SessionId} character-datagram remote={Remote} length={Length} body={Body}",
                 session.Runtime.Id,
@@ -222,14 +222,14 @@ public sealed class CharacterDatagramService(
     {
         await listener.SendAsync(datagram, remote, cancellationToken);
         Interlocked.Increment(ref session.Runtime.SentPackets);
+        runtime.TraceDatagram(
+            session.Runtime,
+            "TX-UDP",
+            datagram,
+            options.HexDumpLimit,
+            protocolId);
         if (options.EnablePacketTracing)
         {
-            runtime.TraceDatagram(
-                session.Runtime,
-                "TX-UDP",
-                datagram,
-                options.HexDumpLimit,
-                protocolId);
             logger.LogInformation(
                 "TX character-datagram remote={Remote} protocol={Protocol} length={Length} body={Body}",
                 remote,

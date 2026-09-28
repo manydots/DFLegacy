@@ -7,6 +7,7 @@ public sealed class ServerOptions
     public string HomeDirectory { get; set; } = AppContext.BaseDirectory;
 
     public AdminOptions Admin { get; set; } = new();
+    public McpOptions Mcp { get; set; } = new();
     public ListenerOptions Entrance { get; set; } = new() { Port = 8080 };
     public ListenerOptions CharacterDatagram { get; set; } = new() { Host = "127.0.0.1", Port = 2311 };
     public GameplayDatagramOptions GameplayDatagram { get; set; } = new();
@@ -22,6 +23,9 @@ public sealed class ServerOptions
     public bool RejectBadCrc32 { get; set; } = false;
     public bool EnablePacketTracing { get; set; } = false;
     public int HexDumpLimit { get; set; } = 64;
+    // 登录成功后的 entrance 握手在即将获取频道列表（协议 1/3）之前延迟 N 秒
+    // 响应，让客户端停留在 loading 加载界面，模拟正式服的加载节奏。0 表示关闭。
+    public int LoginHandshakeDelaySeconds { get; set; } = 3;
 }
 
 public sealed class GameplayDatagramOptions
@@ -67,6 +71,18 @@ public sealed class AdminOptions
 {
     public string Host { get; set; } = "127.0.0.1";
     public int Port { get; set; } = 8081;
+}
+
+/// <summary>
+/// DAF-MCP 总网关（docs/design/09-mcp-packet-tap.md §8）。默认关闭：关闭时
+/// 不开端口、不建线程、零内存驻留。Host 默认回环，改非回环等同主动暴露
+/// 协议流与游戏数据。
+/// </summary>
+public sealed class McpOptions
+{
+    public bool Enabled { get; set; }
+    public string Host { get; set; } = "127.0.0.1";
+    public int Port { get; set; } = 12222;
 }
 
 public sealed class ListenerOptions

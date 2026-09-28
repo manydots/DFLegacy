@@ -12,6 +12,7 @@ public sealed class EntranceService(
     RuntimeState runtime,
     JsonGameStore store,
     CharacterSessionRegistry characterSessions,
+    PartyCoordinator partyCoordinator,
     SkillCatalog skillCatalog,
     QuestCatalog questCatalog,
     CharacterExperienceCatalog experienceCatalog,
@@ -192,7 +193,11 @@ public sealed class EntranceService(
             var gameClientCipher = isChannelPort ? new GameClientCipherState() : null;
             var accountName = string.Empty;
             var accountUid = AccountUidRules.InvalidUid;
-            const ushort localUserId = 1;
+            // The wire identity comes from CharacterNo so two simultaneous
+            // clients get distinct town/party user ids. It is assigned at
+            // SELECT_CHARACTER; every packet that names the local user reads
+            // this closure variable. 1 is the pre-selection placeholder.
+            ushort localUserId = 1;
             CharacterRecord? activeCharacter = null;
             GameCharacterCombatStats? lastProjectedCombatStats = null;
             CharacterSessionLease? activeCharacterLease = null;
@@ -327,6 +332,34 @@ public sealed class EntranceService(
             try
             {
                 using var stream = new SerializedWriteStream(client.GetStream());
+                // Cross-session delivery channel: PartyCoordinator queues
+                // packets here from other sessions' read loops; the write
+                // itself stays on this connection's serialized stream.
+                characterSessions.AttachPacketChannel(
+                    runtimeSession.Id,
+                    packet => _ = SendCrossSessionPacketAsync(packet));
+
+                async Task SendCrossSessionPacketAsync(GameServerPacket packet)
+                {
+                    try
+                    {
+                        await packet.WriteAsync(stream, serverToken);
+                        Interlocked.Increment(ref runtimeSession.SentPackets);
+                        LogPacket("TX", runtimeSession, packet);
+                    }
+                    catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
+                    {
+                    }
+                    catch (Exception exception)
+                    {
+                        logger.LogWarning(
+                            exception,
+                            "Could not deliver a cross-session packet {ProtocolId} on session {SessionId}.",
+                            packet.ProtocolId,
+                            runtimeSession.Id);
+                    }
+                }
+
                 async Task SendWarehouseStateAsync()
                 {
                     var warehouseRefresh = CreateWarehousePacket(
@@ -432,6 +465,40 @@ public sealed class EntranceService(
                             "Could not send megaphone notification to character {CharacterId}.",
                             activeCharacter?.Id);
                     }
+                }
+
+                // Registers this session's town entity with the party
+                // coordinator so same-area residents can see and invite this
+                // character. The appearance packet is built here because only
+                // this connection owns the equipped-item dictionaries.
+                void PublishTownPresence()
+                {
+                    if (activeCharacter is null)
+                    {
+                        return;
+                    }
+
+                    var appearance = CreateTownAppearancePacket(
+                        activeCharacter,
+                        localUserId,
+                        equippedInventory.Values,
+                        creatureInventory.Values,
+                        HasActivePremiumService(GameProtocolEngine.BlackDiamondServiceType));
+                    partyCoordinator.PublishTownPresence(
+                        new PartyPresenceUpdate(
+                            runtimeSession.Id,
+                            activeCharacter.Id,
+                            accountUid,
+                            localUserId,
+                            activeCharacter.Name,
+                            (byte)Math.Clamp(activeCharacter.Level, (byte)1, byte.MaxValue),
+                            (byte)Math.Clamp(activeCharacter.Job, byte.MinValue, byte.MaxValue),
+                            currentTownId,
+                            currentAreaId,
+                            currentX,
+                            currentY,
+                            currentDirection),
+                        appearance);
                 }
 
                 GameSkillEntry[] GetCurrentGameSkills() => currentSkills
@@ -1966,6 +2033,9 @@ public sealed class EntranceService(
                     await SendTownAppearanceAsync(waitForTownActor: true);
                     await SendSilentTownStaminaStateAsync();
                     await SendEnterGameWorldCompleteAsync();
+                    // The town return bypasses SET_USER_AREA, so refresh the
+                    // town presence (and any same-area residents' view) here.
+                    PublishTownPresence();
                     if (leveledUp)
                     {
                         await SendCurrentSkillInfoAsync();
@@ -2560,15 +2630,18 @@ public sealed class EntranceService(
                         if (request.Type == GameProtocolEngine.CommandPacketType
                             && request.ProtocolId == GameProtocolEngine.SetUdpEndpointCommand)
                         {
-                            var parsed = GameDatagramProtocol.TryParseNatReport(
-                                request.Body,
-                                out var natReport);
-                            if (parsed)
-                            {
-                                gameplayDatagram.SetNatReport(
-                                    runtimeSession.Id,
-                                    natReport);
-                            }
+                var parsed = GameDatagramProtocol.TryParseNatReport(
+                    request.Body,
+                    out var natReport);
+                if (parsed)
+                {
+                    gameplayDatagram.SetNatReport(
+                        runtimeSession.Id,
+                        natReport);
+                    // Party members need the fresh endpoint right away or
+                    // their client keeps the "连接中" connecting status.
+                    partyCoordinator.RefreshPartyEndpoints(runtimeSession.Id);
+                }
 
                             var endpointReply = parsed
                                 ? GameProtocolEngine.CreateCommandReply(request, success: true)
@@ -2628,6 +2701,9 @@ public sealed class EntranceService(
                                 await SaveCurrentLocationAsync(serverToken);
                             }
 
+                            // Leaving the game world detaches town presence
+                            // and party membership before the lease goes.
+                            partyCoordinator.OnSessionClosed(runtimeSession.Id);
                             characterSessions.Release(activeCharacterLease);
                             activeCharacterLease = null;
                             activeCharacter = null;
@@ -2806,6 +2882,13 @@ public sealed class EntranceService(
                                     };
                                     _ = SendDungeonPermissionsAsync();
                                 });
+
+                            // Claim the wire identity for this session.
+                            localUserId = (ushort)(character.CharacterNo & 0xFFFF);
+                            if (localUserId == 0)
+                            {
+                                localUserId = 1;
+                            }
 
                             // A displaced connection performs its final save before
                             // releasing the character lease. Reload after the claim
@@ -3452,25 +3535,25 @@ public sealed class EntranceService(
                                 LogPacket("TX", runtimeSession, megaphoneInventoryUpdate);
 
                                 // Routing per client case 130 (0x427518): the
-                                // packet flag is compared with the local channel
-                                // number — equal renders the chat line
-                                // ("频道N name : msg") and, when the packet
-                                // target equals the local uid, the own-speech
-                                // bubble above the head; unequal renders the
-                                // banner with the flag formatted as a channel
-                                // number, so a second, flag-less copy would
-                                // double-display and show a bogus "频道0".
-                                // Every client here is in the configured
-                                // channel, so one broadcast with the channel
-                                // flag plus the speaker's uid is a single,
-                                // correctly labeled display with the bubble.
+                                // packet flag is compared with the local
+                                // channel number — equal renders the chat
+                                // line ("频道N name : msg") and runs the
+                                // bubble path (sub_849280 -> sub_846A10)
+                                // that resolves the speaker by the packet
+                                // uid in the town-user table, so same-area
+                                // residents get the bubble above the
+                                // speaker's head. Every session of this
+                                // process shares the configured channel, so
+                                // one speaker-flagged broadcast per session
+                                // is a single, correctly labeled display
+                                // with the bubble; the banner-only route is
+                                // for other-channel clients, which never
+                                // occur in this process.
                                 var megaphoneRecipients =
                                     characterSessions.NotifyMegaphoneAll(
                                         (GameMessageType)messageRequest.MessageType,
-                                        runtimeSession.Id,
                                         checked((byte)options.Channel.ChannelNumber),
                                         localUserId,
-                                        options.Channel.ChannelNumber == 0 ? (byte)1 : (byte)0,
                                         ClientEncoding.GetBytes(activeCharacter.Name),
                                         messageRequest.MessageBytes);
                                 logger.LogInformation(
@@ -3481,6 +3564,66 @@ public sealed class EntranceService(
                                     remainingCount,
                                     megaphoneRecipients,
                                     ClientEncoding.GetString(messageRequest.MessageBytes));
+                                continue;
+                            }
+
+                            // Direct messages: 1:1 chat is CMD 17 type 18
+                            // (DNF.exe sub_811C20), and the chat-window
+                            // whispers are types 1/7 (shared sender
+                            // sub_8495B0). All three carry the partner name
+                            // as a trailing dstr; the type 1/7 u16 target is
+                            // the partner's area-user id.
+                            //
+                            // Downlink must NOT echo the request type: the
+                            // client routes NOTI 12 type 18 into its open
+                            // 1:1 window via vmt+76 (sub_810A90), which
+                            // feeds the packet-less name straight into
+                            // strlen (sub_810560) and crashes the client —
+                            // NOTI 12 carries no name field, so type 18 is
+                            // an unusable downlink. The original server
+                            // therefore delivers whispers as NOTI 12 type 1
+                            // (light-green private line, speaker resolved
+                            // from the town-user table by the uid). The
+                            // sender needs no echo: both send paths insert
+                            // the outgoing text locally (sub_811C20 /
+                            // sub_8495B0 call sub_811A00).
+                            if (messageRequest.MessageType
+                                is (byte)GameMessageType.Type01LightGreen
+                                    or (byte)GameMessageType.Type07LightGreen
+                                    or (byte)GameMessageType.Type18DirectOutput)
+                            {
+                                var partnerName = ClientEncoding.GetString(
+                                    messageRequest.TargetNameBytes);
+                                var delivered = partyCoordinator.TrySendToName(
+                                    partnerName,
+                                    GameProtocolEngine.CreateMessageNotification(
+                                        GameMessageType.Type01LightGreen,
+                                        localUserId,
+                                        messageRequest.MessageBytes));
+                                if (delivered)
+                                {
+                                    logger.LogInformation(
+                                        "Whisper type {MessageType} from {CharacterName} delivered to {PartnerName} as NOTI 12 type 1: {Message}",
+                                        messageRequest.MessageType,
+                                        activeCharacter.Name,
+                                        partnerName,
+                                        ClientEncoding.GetString(messageRequest.MessageBytes));
+                                }
+                                else
+                                {
+                                    await SendTypedMessageNotificationAsync(
+                                        GameMessageType.Type00DualRouteBrown,
+                                        0,
+                                        ClientEncoding.GetBytes(
+                                            $"{partnerName} 不在线，无法发送悄悄话"));
+                                    logger.LogInformation(
+                                        "Whisper type {MessageType} from {CharacterName} to offline partner {PartnerName}: {Message}",
+                                        messageRequest.MessageType,
+                                        activeCharacter.Name,
+                                        partnerName,
+                                        ClientEncoding.GetString(messageRequest.MessageBytes));
+                                }
+
                                 continue;
                             }
 
@@ -3503,11 +3646,27 @@ public sealed class EntranceService(
                                 GameMessageType.Type03White,
                                 localUserId,
                                 messageRequest.MessageBytes);
+                            // NOTI 12's u16 is the speaker's area-user id, not
+                            // the recipient's: case 12 resolves it through the
+                            // town-user table (sub_849280 -> sub_846A10
+                            // @0x846A27) and renders the speech bubble above
+                            // that character, so every same-area resident needs
+                            // their own copy carrying the speaker's uid. The
+                            // sender's copy above already covers the own
+                            // bubble; same-town-different-area sessions stay
+                            // out of range, matching the original routing.
+                            var mapChatRecipients = partyCoordinator.SendToSameArea(
+                                runtimeSession.Id,
+                                GameProtocolEngine.CreateMessageNotification(
+                                    GameMessageType.Type03White,
+                                    localUserId,
+                                    messageRequest.MessageBytes));
                             logger.LogInformation(
-                                "Map chat from {CharacterName} in town {TownId}, area {AreaId}: {Message}",
+                                "Map chat from {CharacterName} in town {TownId}, area {AreaId} delivered to {Recipients} nearby sessions: {Message}",
                                 activeCharacter.Name,
                                 currentTownId,
                                 currentAreaId,
+                                mapChatRecipients,
                                 ClientEncoding.GetString(messageRequest.MessageBytes));
                             continue;
                         }
@@ -7345,7 +7504,10 @@ public sealed class EntranceService(
                         {
                             if (!options.EnablePacketTracing)
                             {
-                                runtime.TracePacket(
+                                // Snapshot-only (no tap): the RX funnel call in
+                                // LogPacket already owns tap publication for
+                                // this frame.
+                                runtime.TracePacketAlways(
                                     runtimeSession,
                                     "RX-CONSUME-ITEMS",
                                     request,
@@ -7485,7 +7647,7 @@ public sealed class EntranceService(
                         {
                             if (!options.EnablePacketTracing)
                             {
-                                runtime.TracePacket(
+                                runtime.TracePacketAlways(
                                     runtimeSession,
                                     "RX-DUNGEON-ITEM",
                                     request,
@@ -8176,7 +8338,7 @@ public sealed class EntranceService(
                                 // request in the admin trace so a rejected
                                 // product can be diagnosed without enabling
                                 // high-volume tracing for movement packets.
-                                runtime.TracePacket(
+                                runtime.TracePacketAlways(
                                     runtimeSession,
                                     "RX-CERA",
                                     request,
@@ -9985,6 +10147,17 @@ public sealed class EntranceService(
                                     request.Body.AsSpan(7, sizeof(ushort)));
                             }
 
+                            // Movement is only mirrored while the actor is a
+                            // town entity; dungeon-run positions stay private.
+                            if (currentDungeonId == 0 && !inDungeonSelection)
+                            {
+                                partyCoordinator.UpdatePresencePosition(
+                                    runtimeSession.Id,
+                                    currentX,
+                                    currentY,
+                                    currentDirection);
+                            }
+
                             // The local client already owns its movement.
                             // Re-sending USER_POSITION or AREA_USERS on every
                             // one-second update makes it rebuild the area and
@@ -10010,6 +10183,7 @@ public sealed class EntranceService(
                                 await SendTownFatigueStateAsync();
                                 await SendTownAppearanceAsync(waitForTownActor: true);
                                 await SendEnterGameWorldCompleteAsync();
+                                PublishTownPresence();
                             }
                             continue;
                         }
@@ -10060,6 +10234,7 @@ public sealed class EntranceService(
                             await SendTownAppearanceAsync(waitForTownActor: true);
                             await SendSilentTownStaminaStateAsync();
                             await SendEnterGameWorldCompleteAsync();
+                            PublishTownPresence();
                             continue;
                         }
 
@@ -10217,6 +10392,125 @@ public sealed class EntranceService(
                             // The DFLegacy dungeon-selection screen uses command
                             // 142 instead of the in-dungeon GIVEUP_GAME command.
                             await ReturnToTownFromDungeonAsync("back-to-village");
+                            continue;
+                        }
+
+                        // -----------------------------------------------------
+                        // Party block (CMD 10-14). The client sends a two-byte
+                        // sequence number before every command body, so the
+                        // parsers below read fields from offset 2.
+                        // -----------------------------------------------------
+                        if (request.Type == GameProtocolEngine.CommandPacketType
+                            && request.ProtocolId is >= 10 and <= 14)
+                        {
+                            var partyIdentity = activeCharacter is null
+                                ? null
+                                : new PartyMemberIdentity(
+                                    runtimeSession.Id,
+                                    activeCharacter.Id,
+                                    accountUid,
+                                    localUserId,
+                                    activeCharacter.Name,
+                                    (byte)Math.Clamp(activeCharacter.Level, (byte)1, byte.MaxValue),
+                                    (byte)Math.Clamp(activeCharacter.Job, byte.MinValue, byte.MaxValue));
+                            if (partyIdentity is null)
+                            {
+                                // Padded so the client's error-code readers
+                                // stay inside the payload (see
+                                // CreatePeerCommandError).
+                                var identityError = GameProtocolEngine.CreatePeerCommandError(
+                                    request,
+                                    errorCode: 0);
+                                await identityError.WriteAsync(stream, serverToken);
+                                Interlocked.Increment(ref runtimeSession.SentPackets);
+                                LogPacket("TX", runtimeSession, identityError);
+                                continue;
+                            }
+
+                            // A malformed party body must never kill the
+                            // connection — parse and dispatch defensively.
+                            PartyOpResult partyResult;
+                            byte partyErrorCode;
+                            try
+                            {
+                                var parsedSettings = GameProtocolEngine.TryParseSetPartyInfo(
+                                    request.Body,
+                                    out var partySettings);
+                                var parsedPeerRequest = GameProtocolEngine.TryParseRequestPeer(
+                                    request.Body,
+                                    out var peerRequest);
+                                var parsedPeerResponse = GameProtocolEngine.TryParseResponsePeer(
+                                    request.Body,
+                                    out var peerResponse);
+                                var parsedWalkoutSlot = GameProtocolEngine.TryParseWalkoutPartyMember(
+                                    request.Body,
+                                    out var walkoutSlot);
+
+                                (partyResult, partyErrorCode) = request.ProtocolId switch
+                                {
+                                    GameProtocolEngine.SetPartyInfoCommand => parsedSettings
+                                        ? (partyCoordinator.SetPartyInfo(partyIdentity, partySettings), (byte)8)
+                                        : (PartyOpResult.Fail("malformed_set_party_info"), (byte)0),
+                                    GameProtocolEngine.LeavePartyCommand =>
+                                        (partyCoordinator.LeaveParty(partyIdentity), (byte)0x12),
+                                    GameProtocolEngine.WalkoutPartyMemberCommand => parsedWalkoutSlot
+                                        ? (partyCoordinator.Kick(partyIdentity, walkoutSlot), (byte)4)
+                                        : (PartyOpResult.Fail("malformed_walkout"), (byte)0),
+                                    GameProtocolEngine.RequestPeerCommand => parsedPeerRequest
+                                        ? (partyCoordinator.RequestPeer(partyIdentity, peerRequest), (byte)5)
+                                        : (PartyOpResult.Fail("malformed_request_peer"), (byte)0),
+                                    GameProtocolEngine.ResponsePeerCommand => parsedPeerResponse
+                                        ? (partyCoordinator.RespondPeer(partyIdentity, peerResponse), (byte)1)
+                                        : (PartyOpResult.Fail("malformed_response_peer"), (byte)0),
+                                    _ => (PartyOpResult.Fail("unknown_party_command"), (byte)0),
+                                };
+                            }
+                            catch (Exception exception)
+                            {
+                                logger.LogWarning(
+                                    exception,
+                                    "Party command {ProtocolId} from {CharacterId} threw; replying failure.",
+                                    request.ProtocolId,
+                                    partyIdentity.CharacterId);
+                                partyResult = PartyOpResult.Fail("party_command_exception");
+                                partyErrorCode = 0;
+                            }
+
+                            var partyIsSettingsFamily =
+                                request.ProtocolId
+                                    is GameProtocolEngine.SetPartyInfoCommand
+                                    or GameProtocolEngine.LeavePartyCommand
+                                    or GameProtocolEngine.WalkoutPartyMemberCommand;
+                            GameServerPacket partyReply;
+                            if (partyResult.Ok)
+                            {
+                                partyReply = GameProtocolEngine.CreateCommandReply(
+                                    request,
+                                    success: true);
+                            }
+                            else
+                            {
+                                partyReply = partyIsSettingsFamily
+                                    ? GameProtocolEngine.CreatePartyCommandError(
+                                        request,
+                                        partyErrorCode)
+                                    : GameProtocolEngine.CreatePeerCommandError(
+                                        request,
+                                        partyErrorCode);
+                            }
+
+                            await partyReply.WriteAsync(stream, serverToken);
+                            Interlocked.Increment(ref runtimeSession.SentPackets);
+                            LogPacket("TX", runtimeSession, partyReply);
+                            if (!partyResult.Ok)
+                            {
+                                logger.LogInformation(
+                                    "Rejected party command {ProtocolId} for {CharacterId}: {Reason}.",
+                                    request.ProtocolId,
+                                    partyIdentity.CharacterId,
+                                    partyResult.Reason);
+                            }
+
                             continue;
                         }
 
@@ -10623,7 +10917,7 @@ public sealed class EntranceService(
                         {
                             if (!options.EnablePacketTracing)
                             {
-                                runtime.TracePacket(
+                                runtime.TracePacketAlways(
                                     runtimeSession,
                                     "RX-USE-SKILL",
                                     request,
@@ -12513,8 +12807,10 @@ public sealed class EntranceService(
                     }
                 }
 
+                partyCoordinator.OnSessionClosed(runtimeSession.Id);
                 characterSessions.Release(activeCharacterLease);
                 activeCharacterLease = null;
+                characterSessions.DetachPacketChannel(runtimeSession.Id);
                 gameplayDatagram.UnregisterChannelSession(runtimeSession.Id);
                 runtime.Remove(runtimeSession.Id);
                 logger.LogInformation("Entrance client {SessionId} disconnected.", runtimeSession.Id);
@@ -14060,7 +14356,8 @@ public sealed class EntranceService(
         byte MessageType,
         ushort TargetOrItemSpace,
         uint SlotOrReserved,
-        byte[] MessageBytes);
+        byte[] MessageBytes,
+        byte[] TargetNameBytes);
 
     private static byte[] EncodeCharacterName(string name)
     {
@@ -14099,7 +14396,7 @@ public sealed class EntranceService(
                 payloadOffset + sizeof(byte) + sizeof(ushort) + sizeof(uint),
                 sizeof(uint)));
         if (messageLength is 0 or > 0xFF
-            || messageLength != body.Length - messageOffset)
+            || messageLength > body.Length - messageOffset)
         {
             return false;
         }
@@ -14110,12 +14407,56 @@ public sealed class EntranceService(
             return false;
         }
 
+        // Direct messages (type 18, and the type 1/7 chat-window whispers)
+        // append a second CP936 dstr naming the chat partner: DNF.exe
+        // sub_811C20 writes type 18 + zero u16 + zero u32 + text + partner
+        // name (a 20-byte window buffer), and the shared sender sub_8495B0
+        // appends the same name dstr for types 1 and 7. Every other type
+        // ends at the text, so their bodies must not carry trailing bytes.
+        var targetNameBytes = Array.Empty<byte>();
+        if (messageType
+            is (byte)GameMessageType.Type01LightGreen
+                or (byte)GameMessageType.Type07LightGreen
+                or (byte)GameMessageType.Type18DirectOutput)
+        {
+            var nameOffset = messageOffset + (int)messageLength;
+            if (body.Length < nameOffset + sizeof(uint)
+                || !TryReadTargetName(
+                    body.AsSpan(nameOffset),
+                    out targetNameBytes))
+            {
+                return false;
+            }
+        }
+        else if (body.Length != messageOffset + (int)messageLength)
+        {
+            return false;
+        }
+
         request = new SendMessageRequest(
             messageType,
             targetOrItemSpace,
             slotOrReserved,
-            messageBytes);
+            messageBytes,
+            targetNameBytes);
         return true;
+    }
+
+    private static bool TryReadTargetName(
+        ReadOnlySpan<byte> span,
+        out byte[] nameBytes)
+    {
+        nameBytes = [];
+        var nameLength = BinaryPrimitives.ReadUInt32LittleEndian(span);
+        // sub_8495B0 rejects partner names above 0x1E bytes before sending.
+        if (nameLength is 0 or > 0x1E
+            || nameLength != span.Length - sizeof(uint))
+        {
+            return false;
+        }
+
+        nameBytes = span.Slice(sizeof(uint), (int)nameLength).ToArray();
+        return !nameBytes.Contains((byte)0);
     }
 
     internal static bool TryReadLoginCredentials(
@@ -14421,6 +14762,9 @@ public sealed class EntranceService(
 
     private void LogPacket(string direction, RuntimeSession session, PacketFrame frame, PacketFrame? rawFrame = null)
     {
+        // 漏斗无条件收集（Tap 激活时供智能体抓包），tracing 门卫只挡控制台
+        // hex 与日志（docs/design/09-mcp-packet-tap.md §5.2）。
+        runtime.TracePacket(session, direction, frame, options.HexDumpLimit, rawFrame);
         if (!options.EnablePacketTracing)
         {
             return;
@@ -14431,7 +14775,6 @@ public sealed class EntranceService(
         var wire = (rawFrame ?? frame).Encode();
         var rawLimit = Math.Min(wire.Length, options.HexDumpLimit + PacketFrame.HeaderLength);
         var raw = ToSpacedHex(wire.AsSpan(0, rawLimit));
-        runtime.TracePacket(session, direction, frame, options.HexDumpLimit);
         string? plainText = null;
         try
         {
@@ -14457,6 +14800,7 @@ public sealed class EntranceService(
 
     private void LogPacket(string direction, RuntimeSession session, GameServerPacket packet)
     {
+        runtime.TracePacket(session, direction, packet, options.HexDumpLimit);
         if (!options.EnablePacketTracing)
         {
             return;
@@ -14467,7 +14811,6 @@ public sealed class EntranceService(
         var wire = packet.Encode();
         var rawLimit = Math.Min(wire.Length, options.HexDumpLimit + GameServerPacket.HeaderLength);
         var raw = ToSpacedHex(wire.AsSpan(0, rawLimit));
-        runtime.TracePacket(session, direction, packet, options.HexDumpLimit);
         string? plainText = null;
         try
         {

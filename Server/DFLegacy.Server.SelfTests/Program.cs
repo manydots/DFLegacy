@@ -25,6 +25,7 @@ DungeonClearExperienceSmokeTests.Run(Check);
 ItemSealingSmokeTests.Run(Check);
 AntibotReportSmokeTests.Run(Check);
 MegaphoneSmokeTests.Run(Check);
+PartySmokeTests.Run(Check);
 await CompoundItemSmokeTests.RunAsync(Check);
 await EquipmentQualitySmokeTests.RunAsync(Check);
 
@@ -33,6 +34,13 @@ Check(!defaultServerOptions.EnablePacketTracing, "packet tracing is disabled by 
 Check(defaultServerOptions.GameplayDatagram.MonsterObjectType == 0x0211,
     "DFLegacy IRDMonster network object type is 0x211");
 Check(defaultServerOptions.HexDumpLimit <= 64, "default packet dump limit stays lightweight");
+Check(!defaultServerOptions.Mcp.Enabled
+    && defaultServerOptions.Mcp.Host == "127.0.0.1"
+    && defaultServerOptions.Mcp.Port == 12222,
+    "DAF-MCP is loopback-bound on port 12222 and disabled by default");
+
+PacketTapFunnelSmokeTests.Run(Check);
+McpModuleLoaderSmokeTests.Run(Check);
 
 var sharedRandomValue = GameRandomSource.Shared.Next(10_000);
 Check(sharedRandomValue is >= 0 and < 10_000
@@ -160,6 +168,35 @@ Check(!EntranceService.TryReadSendMessage(
         capturedMapChatBody[..^1],
         out _),
     "CMD 17 parser rejects a body shorter than its declared text length");
+// Captured on channel:7001 (packet_watch seq 211): a real 1:1 chat send of
+// "77777" to partner "Fight" — type 18 with the trailing partner-name dstr.
+var capturedOneToOneBody = Convert.FromHexString(
+    "210012000000000000050000003737373737050000004669676874");
+Check(EntranceService.TryReadSendMessage(capturedOneToOneBody, out var capturedOneToOne)
+    && capturedOneToOne.MessageType == (byte)GameMessageType.Type18DirectOutput
+    && capturedOneToOne.TargetOrItemSpace == 0
+    && capturedOneToOne.SlotOrReserved == 0
+    && Encoding.GetEncoding(936).GetString(capturedOneToOne.MessageBytes) == "77777"
+    && Encoding.GetEncoding(936).GetString(capturedOneToOne.TargetNameBytes) == "Fight",
+    "captured 2008 CMD 17 1:1 chat request parses type 18, text and trailing partner name");
+Check(!EntranceService.TryReadSendMessage(
+        Convert.FromHexString("21001200000000000005000000373737373704000000466967"),
+        out _),
+    "CMD 17 type 18 parser rejects a partner name that overruns the body");
+Check(!EntranceService.TryReadSendMessage(
+        Convert.FromHexString("2100120000000000000500000037373737"),
+        out _),
+    "CMD 17 type 18 parser rejects a body without the partner-name dstr");
+// Captured on channel:7001 (packet_watch seq 148): the chat-window whisper
+// "1111" to "Fight" — type 1 carries the partner uid and the same name dstr.
+var capturedWhisperBody = Convert.FromHexString(
+    "0F00010700000000000400000031313131050000004669676874");
+Check(EntranceService.TryReadSendMessage(capturedWhisperBody, out var capturedWhisper)
+    && capturedWhisper.MessageType == (byte)GameMessageType.Type01LightGreen
+    && capturedWhisper.TargetOrItemSpace == 7
+    && Encoding.GetEncoding(936).GetString(capturedWhisper.MessageBytes) == "1111"
+    && Encoding.GetEncoding(936).GetString(capturedWhisper.TargetNameBytes) == "Fight",
+    "captured 2008 CMD 17 whisper request parses type 1, partner uid, text and name");
 var emptyMapChatBody = Convert.FromHexString("0A000301000000000000000000");
 Check(!EntranceService.TryReadSendMessage(emptyMapChatBody, out _),
     "CMD 17 parser rejects an empty chat message");

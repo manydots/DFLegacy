@@ -30,6 +30,17 @@ builder.Configuration.AddJsonFile(
 
 var options = builder.Configuration.GetSection("DFLegacy").Get<ServerOptions>() ?? new ServerOptions();
 options.HomeDirectory = homeAnchor;
+
+// DAF-MCP 模块运行期加载（docs/design/09-mcp-packet-tap.md §5.3）：默认关闭即
+// 短路；失败只降级 MCP。组合根的 app.Logger 要到 Build 后才有，装配期日志走
+// 同格式的引导记录器。
+var moduleLogger = LoggerFactory.Create(logging => logging.AddSimpleConsole(console =>
+{
+    console.SingleLine = true;
+    console.TimestampFormat = "HH:mm:ss ";
+})).CreateLogger("DFLegacy.Server.McpModuleLoader");
+McpModuleLoader.TryAttach(builder.Services, options, moduleLogger);
+
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var clientTextEncoding = PvfEncodings.Cp936Strict();
 builder.WebHost.ConfigureKestrel(kestrel =>
@@ -40,6 +51,7 @@ builder.Services.AddSingleton<ScriptFileSystem>();
 builder.Services.AddSingleton<RuntimeState>();
 builder.Services.AddSingleton<JsonGameStore>();
 builder.Services.AddSingleton<CharacterSessionRegistry>();
+builder.Services.AddSingleton<PartyCoordinator>();
 builder.Services.AddSingleton<SkillCatalog>();
 builder.Services.AddSingleton<QuestCatalog>();
 builder.Services.AddSingleton<CharacterExperienceCatalog>();
@@ -79,6 +91,17 @@ builder.Services.AddHostedService(serviceProvider =>
 builder.Services.AddHostedService<ProbeService>();
 
 var app = builder.Build();
+
+// 快照/日志通道开关（= EnablePacketTracing）；Tap 通道由 MCP 模块宿主自行接入。
+app.Services.GetRequiredService<RuntimeState>().TracingEnabled = options.EnablePacketTracing;
+
+// Party real-time datagrams relay through the gameplay UDP listener: the
+// endpoint table advertises this server for every peer, and this resolver
+// tells the listener where to forward each sender's datagrams.
+var partyCoordinator = app.Services.GetRequiredService<PartyCoordinator>();
+app.Services.GetRequiredService<GameplayDatagramService>()
+    .SetRelayResolver(partyCoordinator.GetPartyPeerSessionIds);
+
 var randomStatus = GameRandomSource.Shared.GetStatus();
 app.Logger.LogInformation(
     "Game random source initialized: provider={Provider}.",

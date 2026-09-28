@@ -15,6 +15,38 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
 {
     private readonly ConcurrentDictionary<CharacterSessionKey, CharacterSessionLease> _activeCharacters = new();
 
+    // Per-connection outbound channels for cross-session pushes (party
+    // notifications, town presence). Keyed by the owning RuntimeSession id;
+    // channels detach when the connection's read loop finally block runs.
+    private readonly ConcurrentDictionary<Guid, Action<GameServerPacket>> _packetChannels = new();
+
+    /// <summary>Registers this connection's serialized write delegate so other
+    /// sessions can deliver packets to it.</summary>
+    public void AttachPacketChannel(Guid sessionId, Action<GameServerPacket> channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        _packetChannels[sessionId] = channel;
+    }
+
+    public void DetachPacketChannel(Guid sessionId)
+    {
+        _packetChannels.TryRemove(sessionId, out _);
+    }
+
+    /// <summary>Queues a packet onto the named session's write channel.
+    /// Returns false when the session is gone or never attached one.</summary>
+    public bool NotifyGamePacket(Guid sessionId, GameServerPacket packet)
+    {
+        ArgumentNullException.ThrowIfNull(packet);
+        if (!_packetChannels.TryGetValue(sessionId, out var channel))
+        {
+            return false;
+        }
+
+        channel(packet);
+        return true;
+    }
+
     public Task<CharacterSessionLease> ClaimAsync(
         Guid characterId,
         Guid sessionId,
@@ -411,26 +443,29 @@ public sealed class CharacterSessionRegistry(ILogger<CharacterSessionRegistry> l
 
     public int NotifyMegaphoneAll(
         GameMessageType messageType,
-        Guid speakerSessionId,
         byte speakerOwnerFlag,
         ushort speakerTargetAreaUserId,
-        byte otherOwnerFlag,
         byte[] senderName,
         byte[] messageBytes)
     {
         ArgumentNullException.ThrowIfNull(senderName);
         ArgumentNullException.ThrowIfNull(messageBytes);
+        // Case 130 routes on the packet flag versus the local channel number:
+        // equal renders the "频道N name : msg" chat line and runs the bubble
+        // path (sub_849280 -> sub_846A10 @0x846A27), which resolves the
+        // speaker by the packet uid in the town-user table, so residents of
+        // the speaker's area see the bubble above the speaker's head and the
+        // uid match shows the speaker their own bubble. Only flag-unequal
+        // copies render the plain banner, and those belong to other-channel
+        // clients — never to sessions of this process's single configured
+        // channel — so every session here receives the speaker-flagged copy.
         var leases = SnapshotDistinctSessions();
         foreach (var lease in leases)
         {
-            // The client spawns the own-speech bubble when the packet target
-            // equals its local id, so only the speaker's copy carries it;
-            // every other session takes the banner-only routing.
-            var isSpeaker = lease.SessionId == speakerSessionId;
             lease.NotifyMegaphone(
                 messageType,
-                isSpeaker ? speakerOwnerFlag : otherOwnerFlag,
-                isSpeaker ? speakerTargetAreaUserId : (ushort)0,
+                speakerOwnerFlag,
+                speakerTargetAreaUserId,
                 senderName,
                 messageBytes);
         }

@@ -4,6 +4,11 @@
       "Host": "127.0.0.1",
       "Port": 8081
     },
+    "Mcp": {
+      "Enabled": true,
+      "Host": "127.0.0.1",
+      "Port": 12222
+    },
     "Entrance": {
       "Enabled": true,
       "Host": "127.0.0.1",
@@ -55,6 +60,7 @@
     "MaximumPacketLength": 4194304,
     "RejectBadCrc32": false,
     "EnablePacketTracing": true,
-    "HexDumpLimit": 256
+    "HexDumpLimit": 256,
+    "LoginHandshakeDelaySeconds": 3
   }
 }

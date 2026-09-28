@@ -5,6 +5,9 @@
     <Platform Name="x86" />
   </Configurations>
   <Project Path="Server/DFLegacy.Server/DFLegacy.Server.csproj" />
+  <!-- DAF-MCP 模块：Server 编译期零引用，运行期由 McpModuleLoader 按开关加载
+       （docs/design/09-mcp-packet-tap.md）。 -->
+  <Project Path="Server/DFLegacy.Mcp/DFLegacy.Mcp.csproj" />
   <Project Path="Server/DFLegacy.Server.SelfTests/DFLegacy.Server.SelfTests.csproj" />
   <Project Path="Client/DFLegacy.Launcher/DFLegacy.Launcher.csproj" />
   <!-- 原生项目仅作 IDE 可见性成员：构建统一走 patch.bat（docs/design/03 · 4.5），
