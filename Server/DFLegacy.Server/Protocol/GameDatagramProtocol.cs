@@ -24,7 +24,7 @@ public sealed record GamePeerInfo(
 public sealed record PartyWireSlot(ushort UserId, byte State);
 
 /// <summary>One PARTY_INFO block. Block types: 0 full formation, 1 settings
-/// only, 2 roster only, 3 clear (no payload beyond id and type). The 60CN-ACT1
+/// only, 2 roster only, 3 clear (no payload beyond id and type). The 60A1
 /// reader (0x41B8F9) reads kind 0/1 settings as the bare pair u8 title kind +
 /// u8 user max and renders kind-0 titles from its local string 0x272, so no
 /// title text ever crosses the wire downstream.</summary>

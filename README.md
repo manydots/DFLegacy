@@ -62,7 +62,7 @@
 
 ## 已知缺口
 
-- **多人组队** 尚未实现组队创建、邀请、接受、退队、踢人及成员互见；多人进同一副本的协同流程亦未完成。
+- **多人组队** 已落地雏形（组队创建、邀请、接受、退队、踢人及成员互见的协议链路，格式与实现见 `docs/protocol/packet-detail-party-60cn.md`）；完整流程的真机复测仍在推进，多人进同一副本的协同编队尚未完成。
 - **玩家交易** 尚未实现玩家之间的物品、金币交易及双方确认流程。
 - **私人商店** 尚未实现摆摊、商品展示及玩家购买流程。
 - **社交与公会** 尚未实现好友、黑名单及完整的公会系统；战场、公会战等玩法尚未实现和验证。
@@ -78,12 +78,6 @@
 
 ## 构建与启动
 
-在仓库根目录打开 Visual Studio 开发者 PowerShell，先构建混合解决方案：
-
-```powershell
-msbuild .\DFLegacy.Emulator.slnx /m /restore /p:Configuration=Release
-```
-
 发布服务端与启动器到同一目录：
 
 ```powershell
@@ -93,10 +87,10 @@ dotnet publish .\Client\DFLegacy.Launcher\DFLegacy.Launcher.csproj -c Release -o
 
 服务端发布可由仓库根目录的 `publish.bat` 一键完成：脚本通过 .NET SDK 的 `dotnet publish` 发布到 `dist\DFLegacy.Server`，发布前会清空该输出目录，任一步失败即停止并返回非零退出码。DAF-MCP 模块由 `publish-mcp.bat` 单独发布到 `dist\DFLegacy.Mcp`，模块 DLL 需手动拷入 `dist\DFLegacy.Server` 后 MCP 才生效（未拷贝时服务端照常运行，仅不加载 MCP）。Linux/macOS 下对应使用 `publish.sh` 与 `publish-mcp.sh`。
 
-启动器发布会构建并复制 IJL15。若只构建服务端而没有 `DFLegacy.RandomNative.dll` 原生随机模块，则仍使用操作系统伪随机。
+原生模块由仓库根目录的 `patch.bat` 构建（CMake 与 Visual Studio C++ 工具集编译 IJL15 与 RandomNative，并将启动器发布到 `artifacts\native\launcher`）；启动器发布会复制已构建的 `ijl15.dll`。若只发布服务端而没有 `DFLegacy.RandomNative.dll` 原生随机模块，则仍使用操作系统伪随机。
 
-1. `server.json` 的 `DFLegacy.ScriptPvfPath` 默认 `..\Script.pvf`；发布目录放在客户端目录内（与 `DNF.exe` 同级）时无需修改，否则改为实际 PVF 路径（相对路径以服务端程序目录为基准）。
-2. 同目录的 `launcher.json` 的 `ClientPath` 默认 `..\DNF.exe`，按相同布局解析；账号也在此配置，客户端目录应包含匹配的 `Script.pvf`。
+1. `server.json` 的 `DFLegacy.ScriptPvfPath` 默认 `..\Script.pvf`；发布目录放在客户端目录内（与客户端主程序同级）时无需修改，否则改为实际 PVF 路径（相对路径以服务端程序目录为基准）。
+2. 同目录的 `launcher.json` 的 `ClientPath` 默认指向客户端主程序，按相同布局解析；账号也在此配置，客户端目录应包含匹配的 `Script.pvf`。
 3. 运行 `DFLegacy.Launcher.exe`。默认 `StartServer: true`，启动器会按需启动本地服务端。
 
 示例配置按"发布目录位于客户端目录内"的布局使用相对路径；布局不同时请自行调整为实际路径。

@@ -27,7 +27,7 @@ public sealed record PartyMemberIdentity(
 }
 
 /// <summary>
-/// Party constants recovered from the DNF.exe 60CN-ACT1 client: the PARTY_INFO
+/// Party constants recovered from the DNF.exe 60A1 client: the PARTY_INFO
 /// roster loop at 0x41B9CD iterates exactly four slots and the party window
 /// kick flow scans slots 0..3 (0x8520C8), so a party never holds more than
 /// four members. The SET_PARTY_INFO dialog offers 2/3/4 capacity radios

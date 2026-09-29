@@ -39,7 +39,7 @@ public sealed record PartyOpResult
 
 /// <summary>
 /// Party lifecycle and registry, ported from the ServerS4A21 PartyManager and
-/// reduced to what the 60CN-ACT1 protocol exercises: SET_PARTY_INFO
+/// reduced to what the 60A1 protocol exercises: SET_PARTY_INFO
 /// create/edit, REQUEST_PEER/RESPONSE_PEER type-0 invites, LEAVE_PARTY,
 /// WALKOUT kick by slot, and disconnect cleanup. Thread-safe; the coordinator
 /// resolves sessions and builds packets, this class only owns state.

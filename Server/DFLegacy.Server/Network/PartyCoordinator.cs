@@ -20,7 +20,7 @@ public sealed record PartyPresenceUpdate(
     byte Direction);
 
 /// <summary>
-/// Coordinates party state with cross-session delivery for the 60CN-ACT1
+/// Coordinates party state with cross-session delivery for the 60A1
 /// protocol. Flow ported from ServerS4A21: SET_PARTY_INFO creates or edits a
 /// party, REQUEST_PEER type 0 invites (or applies), RESPONSE_PEER type 0
 /// accepts, LEAVE_PARTY walks out, WALKOUT_PARTY_MEMBER kicks by slot.

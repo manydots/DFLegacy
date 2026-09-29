@@ -3,7 +3,7 @@ using DFLegacy.Server;
 using Microsoft.Extensions.Logging.Abstractions;
 
 /// <summary>
-/// Byte-level expectations follow the DNF.exe 60CN-ACT1 disassembly:
+/// Byte-level expectations follow the 60A1 client disassembly:
 /// SET_PARTY_INFO writer 0x7D5F86, REQUEST_PEER writer 0x4FE9B0,
 /// RESPONSE_PEER accept writer 0x4FEBC0, WALKOUT writer 0x8520F3, and the
 /// NOTI 9/7/8/10 readers at 0x41B7A1 / 0x41B4C8 / 0x41B5F1 / 0x41C41A.

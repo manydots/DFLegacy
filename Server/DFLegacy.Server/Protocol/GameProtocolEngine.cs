@@ -253,7 +253,7 @@ public static class GameProtocolEngine
     // NOTI 7/8/9/10 are the party block: a 13-byte invite popup (case
     // 0x41B4C8), the 7-byte accept ack (case 0x41B5F1), the slot-diff party
     // roster (case 0x41B7A1) and the two-byte departure message (case
-    // 0x41C41A) in DNF.exe 60CN-ACT1.
+    // 0x41C41A) in DNF.exe 60A1.
     public const byte PeerRequestNotification = 7;
     public const byte PeerResponseNotification = 8;
     public const byte PartyInfoNotification = 9;

@@ -8,7 +8,7 @@ namespace DFLegacy.Mcp;
 
 /// <summary>
 /// G1 Resources（docs/design/09-mcp-packet-tap.md §6.4）：整张报文名注册表
-/// JSON（源自 60CN-ACT1 客户端逆向，见 PacketNames.cs 头注释）。经
+/// JSON（源自 60A1 客户端逆向，见 PacketNames.cs 头注释）。经
 /// PacketNames.TryGet 枚举两张表，Server 侧零改动。
 /// </summary>
 [McpServerResourceType]

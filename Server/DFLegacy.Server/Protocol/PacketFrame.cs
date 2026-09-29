@@ -53,13 +53,13 @@ public sealed record PacketFrame(byte Type, byte ProtocolId, uint DeclaredCrc32,
         var totalLength = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
         if (totalLength < HeaderLength || totalLength > maximumLength)
         {
-            throw new InvalidDataException($"Invalid DNF frame length {totalLength}.");
+            throw new InvalidDataException($"Invalid frame length {totalLength}.");
         }
 
         var body = new byte[checked((int)totalLength - HeaderLength)];
         if (body.Length > 0 && !await ReadExactOrEofAsync(stream, body, cancellationToken))
         {
-            throw new EndOfStreamException("The peer closed in the middle of a DNF frame.");
+            throw new EndOfStreamException("The peer closed in the middle of a frame.");
         }
 
         return new PacketFrame(

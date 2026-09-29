@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace DFLegacy.Protocol;
 
 /// <summary>
-/// Packet enum names recovered from the DNF.exe 60CN-ACT1 client binary
+/// Packet enum names recovered from the DNF.exe 60A1 client binary
 /// (name tables at .rdata 0xB54170 NOTI / 0xB54430 CMD; see
 /// docs/protocol/client-packet-enums-60cn.md). Regenerate with
 /// tools/gen_packet_names.py after re-extracting from a new client build.
